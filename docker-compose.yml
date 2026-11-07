@@ -1,0 +1,17 @@
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: training_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: training_management
+      POSTGRES_USER: training_user
+      POSTGRES_PASSWORD: training_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_pg16:/var/lib/postgresql/data
+
+volumes:
+  postgres_data_pg16:
