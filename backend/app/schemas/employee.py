@@ -16,17 +16,24 @@ class EmployeeBase(BaseModel):
 
     employment_status: str = Field(min_length=1, max_length=30)
 
-    working_hours_per_week: Decimal = Field(ge=0, le=168)
-    learning_hours_per_week: Decimal = Field(ge=0, le=168)
-    years_of_experience: Decimal = Field(ge=0)
+    working_hours_per_week: Decimal | None = Field(
+        default=None, ge=0, le=168
+    )
+
+    learning_hours_per_week: Decimal | None = Field(
+        default=None, ge=0, le=168
+    )
+
+    years_of_experience: Decimal | None = Field(
+        default=None, ge=0
+    )
 
     hire_date: date
     job_level: str = Field(min_length=1, max_length=50)
     employment_type: str = Field(min_length=1, max_length=50)
 
     preferred_learning_mode: str | None = Field(
-        default=None,
-        max_length=30
+        default=None, max_length=30
     )
 
 
@@ -42,14 +49,25 @@ class EmployeeUpdate(BaseModel):
     manager_id: str | None = Field(default=None, max_length=100)
     employment_status: str | None = Field(default=None, max_length=30)
 
-    working_hours_per_week: Decimal | None = Field(default=None, ge=0, le=168)
-    learning_hours_per_week: Decimal | None = Field(default=None, ge=0, le=168)
-    years_of_experience: Decimal | None = Field(default=None, ge=0)
+    working_hours_per_week: Decimal | None = Field(
+        default=None, ge=0, le=168
+    )
+
+    learning_hours_per_week: Decimal | None = Field(
+        default=None, ge=0, le=168
+    )
+
+    years_of_experience: Decimal | None = Field(
+        default=None, ge=0
+    )
 
     hire_date: date | None = None
     job_level: str | None = Field(default=None, max_length=50)
     employment_type: str | None = Field(default=None, max_length=50)
-    preferred_learning_mode: str | None = Field(default=None, max_length=30)
+
+    preferred_learning_mode: str | None = Field(
+        default=None, max_length=30
+    )
 
 
 class EmployeeResponse(EmployeeBase):

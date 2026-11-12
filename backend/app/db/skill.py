@@ -29,19 +29,29 @@ class Skill(Base):
         nullable=True
     )
 
-    # Job roles that require this skill
+    # ESCO reference identifier
+    esco_concept_uri: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        unique=True
+    )
+
+    # Alternative names used for matching skills
+    alternative_labels: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True
+    )
+
     job_requirements = relationship(
         "JobSkill",
         back_populates="skill"
     )
 
-    # Employee assessments for this skill
     assessments = relationship(
         "SkillAssessment",
         back_populates="skill"
     )
 
-    # Courses that teach this skill
     course_skills = relationship(
         "CourseSkill",
         back_populates="skill"

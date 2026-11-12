@@ -14,3 +14,9 @@ from backend.app.db.course_skill import CourseSkill
 from backend.app.db.session_attendance import SessionAttendance
 from backend.app.db.session_feedback import SessionFeedback
 from backend.app.db.enrollment_assessment import EnrollmentAssessment
+from backend.app.db.import_batch import ImportBatch
+from backend.app.db.import_row_issue import ImportRowIssue
+from backend.app.db.import_mapping_profile import ImportMappingProfile
+from backend.app.db.historical_training_record import HistoricalTrainingRecord
+
+from backend.app.db.import_issue_correction import ImportIssueCorrection

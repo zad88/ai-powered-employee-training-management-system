@@ -1,3 +1,4 @@
+
 from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -6,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class CourseCreate(BaseModel):
     course_id: str = Field(min_length=1, max_length=100)
     course_title: str = Field(min_length=2, max_length=200)
-    course_description: str = Field(min_length=1)
+    course_description: str | None = None
     course_category: str = Field(min_length=1, max_length=100)
 
     course_duration_hours: float = Field(gt=0)
@@ -85,7 +86,7 @@ class CourseResponse(BaseModel):
     company_id: int
     course_id: str
     course_title: str
-    course_description: str
+    course_description: str | None = None
     course_category: str
     course_duration_hours: float
     course_provider: str | None = None

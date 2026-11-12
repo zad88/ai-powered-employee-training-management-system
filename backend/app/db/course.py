@@ -47,9 +47,9 @@ class Course(Base):
         nullable=False
     )
 
-    course_description: Mapped[str] = mapped_column(
+    course_description: Mapped[str | None] = mapped_column(
         Text,
-        nullable=False
+        nullable=True
     )
 
     course_category: Mapped[str] = mapped_column(
@@ -126,25 +126,21 @@ class Course(Base):
         nullable=True
     )
 
-    # Company that owns the course
     company = relationship(
         "Company",
         back_populates="courses"
     )
 
-    # Scheduled sessions for this course
     sessions = relationship(
         "CourseSession",
         back_populates="course"
     )
 
-    # Skills covered by this course
     course_skills = relationship(
         "CourseSkill",
         back_populates="course"
     )
 
-    # Employee enrollments in this course
     enrollments = relationship(
         "Enrollment",
         back_populates="course"

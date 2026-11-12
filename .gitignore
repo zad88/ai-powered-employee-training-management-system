@@ -24,3 +24,12 @@ __pycache__/
 
 # IDE
 .vscode/
+# Uploaded employee and company import files
+backend/data/imports/
+
+# Temporary backup files
+*.bak
+*.backup_*
+*.before_*.bak
+*_before_*.py
+backend/backups/
