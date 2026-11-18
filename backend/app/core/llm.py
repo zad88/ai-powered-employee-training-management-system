@@ -1,28 +1,35 @@
-
-import os
+﻿import os
 
 from dotenv import load_dotenv
-from google import genai
+from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
-api_key = os.getenv("GEMINI_API_KEY")
 
-if not api_key:
-    raise ValueError("GEMINI_API_KEY is missing from your .env file.")
+def get_llm() -> ChatOpenAI:
+    """Create and return the configured OpenAI chat model."""
+    api_key = os.getenv("OPENAI_API_KEY")
 
-client = genai.Client(api_key=api_key)
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is missing from your .env file.")
+
+    model = os.getenv("OPENAI_MODEL", "gpt-5.4")
+
+    return ChatOpenAI(
+        model=model,
+        api_key=api_key,
+        temperature=0,
+    )
 
 
 def ask_llm(prompt: str) -> str:
-    """Send a prompt to Gemini and return its text response."""
-    response = client.models.generate_content(
-        model="gemini-3.5-flash-lite",
-        contents=prompt,
-    )
+    """Send a prompt to OpenAI and return its text response."""
+    response = get_llm().invoke(prompt)
 
-    if not response.text:
-        raise RuntimeError("Gemini returned no text.")
+    if not response.content:
+        raise RuntimeError("OpenAI returned no text.")
 
-    return response.text
+    if isinstance(response.content, str):
+        return response.content
 
+    return str(response.content)

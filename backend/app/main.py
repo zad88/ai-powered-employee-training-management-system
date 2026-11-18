@@ -1,6 +1,7 @@
 ﻿import backend.app.db.models
 
 from fastapi import FastAPI
+from backend.app.api.tna import router as tna_router
 from backend.app.api.employee_imports import router as employee_imports_router
 from backend.app.api.skill_assessments import router as skill_assessments_router
 from backend.app.api.health import router as health_router
@@ -34,6 +35,7 @@ def home():
 
 
 app.include_router(health_router)
+app.include_router(tna_router)
 app.include_router(employees_router)
 app.include_router(skills_router)
 app.include_router(job_skills_router)
@@ -48,4 +50,3 @@ app.include_router(session_attendance_router)
 app.include_router(session_feedback_router)
 app.include_router(enrollment_assessments_router) 
 app.include_router(employee_imports_router)
-

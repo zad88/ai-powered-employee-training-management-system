@@ -864,3 +864,1125 @@ h1 { font-size: 27px; letter-spacing: -.8px; margin: 9px 0 6px; }
   .employee-skills-status { width: 100%; }
   .employee-skills-panel { padding: 14px; }
 }
+
+/* ASSESSMENT MANAGEMENT */
+.assessment-content {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.assessment-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.assessment-stat {
+  background: #fff;
+  border: 1px solid #e8ebf0;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assessment-stat span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.assessment-stat strong {
+  color: #172033;
+  font-size: 28px;
+}
+
+.assessment-stat small {
+  color: #8992a3;
+  font-size: 12px;
+}
+
+.assessment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.assessment-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.assessment-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.assessment-form-grid label > span {
+  color: #d04444;
+}
+
+.assessment-form-grid input,
+.assessment-form-grid select,
+.assessment-form-grid textarea,
+.assessment-filter {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  background: #fff;
+  color: #273449;
+  font: inherit;
+  font-size: 13px;
+}
+
+.assessment-form-grid textarea {
+  resize: vertical;
+}
+
+.assessment-form-grid input:focus,
+.assessment-form-grid select:focus,
+.assessment-form-grid textarea:focus,
+.assessment-filter:focus {
+  outline: 2px solid #dce7ff;
+  border-color: #7899df;
+}
+
+.assessment-comments {
+  grid-column: 1 / -1;
+}
+
+.assessment-form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #edf0f4;
+}
+
+.assessment-form-footer p {
+  color: #667085;
+  font-size: 12px;
+}
+
+.assessment-form-footer button {
+  border: 0;
+  border-radius: 8px;
+  padding: 11px 18px;
+  background: #263f75;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.assessment-form-footer button:disabled,
+.assessment-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.assessment-filter {
+  width: auto;
+  min-width: 160px;
+}
+
+.assessment-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.assessment-actions button {
+  border: 1px solid #dfe3ea;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.assessment-approve {
+  background: #edf8f1;
+  color: #207447;
+  border-color: #ccebd8 !important;
+}
+
+.assessment-reject {
+  background: #fff1f0;
+  color: #b43e38;
+  border-color: #f2d1ce !important;
+}
+
+.assessment-success {
+  padding: 12px 16px;
+  border: 1px solid #ccebd8;
+  border-radius: 8px;
+  background: #edf8f1;
+  color: #207447;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .assessment-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .assessment-stats,
+  .assessment-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .assessment-comments {
+    grid-column: auto;
+  }
+
+  .assessment-form-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .assessment-form-footer button {
+    width: 100%;
+  }
+}
+
+/* SKILL ASSESSMENT MANAGEMENT */
+
+.assessment-page {
+  width: 100%;
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 28px;
+  color: var(--foreground);
+}
+
+.assessment-header,
+.assessment-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+
+.assessment-header {
+  margin-bottom: 26px;
+}
+
+.assessment-eyebrow {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: #64748b;
+}
+
+.assessment-header h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.assessment-header p:not(.assessment-eyebrow),
+.assessment-section-heading p {
+  margin: 7px 0 0;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.assessment-refresh,
+.assessment-submit {
+  border: 0;
+  border-radius: 8px;
+  padding: 11px 17px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.assessment-refresh {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.assessment-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.assessment-stat {
+  padding: 20px;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px;
+}
+
+.assessment-stat span {
+  display: block;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.assessment-stat strong {
+  display: block;
+  margin-top: 9px;
+  font-size: 27px;
+  font-weight: 700;
+}
+
+.assessment-panel {
+  margin-bottom: 24px;
+  padding: 24px;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 12px;
+}
+
+.assessment-panel h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.assessment-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.assessment-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.assessment-form input,
+.assessment-form select,
+.assessment-form textarea,
+.assessment-filter {
+  width: 100%;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 8px;
+  background: var(--background, #fff);
+  color: var(--foreground, #111827);
+  font: inherit;
+  font-size: 14px;
+}
+
+.assessment-form input:focus,
+.assessment-form select:focus,
+.assessment-form textarea:focus,
+.assessment-filter:focus {
+  outline: 2px solid #a5b4fc;
+  outline-offset: 1px;
+}
+
+.assessment-full-width {
+  grid-column: 1 / -1;
+}
+
+.assessment-submit {
+  background: #4f46e5;
+  color: white;
+}
+
+.assessment-submit:hover {
+  background: #4338ca;
+}
+
+.assessment-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.assessment-note {
+  margin: 16px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.assessment-alert {
+  margin-bottom: 18px;
+  padding: 12px 15px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.assessment-alert.error {
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+}
+
+.assessment-alert.success {
+  background: #f0fdf4;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}
+
+.assessment-empty {
+  padding: 24px 10px;
+  color: #64748b;
+  text-align: center;
+  font-size: 14px;
+}
+
+.assessment-record-heading {
+  margin-bottom: 20px;
+}
+
+.assessment-filter {
+  width: auto;
+  min-width: 170px;
+}
+
+.assessment-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.assessment-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.assessment-table th,
+.assessment-table td {
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  white-space: nowrap;
+}
+
+.assessment-table th {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.assessment-status {
+  display: inline-block;
+  padding: 5px 9px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.assessment-status.pending-review {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.assessment-status.approved {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.assessment-status.rejected {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.assessment-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.assessment-actions button {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.assessment-approve {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.assessment-reject {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.assessment-no-action {
+  color: #94a3b8;
+}
+
+@media (max-width: 800px) {
+  .assessment-page {
+    padding: 18px;
+  }
+
+  .assessment-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .assessment-header,
+  .assessment-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .assessment-form {
+    grid-template-columns: 1fr;
+  }
+
+  .assessment-full-width {
+    grid-column: auto;
+  }
+
+  .assessment-filter {
+    width: 100%;
+  }
+
+  .assessment-panel {
+    padding: 17px;
+  }
+}
+
+/* JOB SKILL REQUIREMENTS MANAGEMENT */
+
+.job-skills-page {
+  width: 100%;
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 32px;
+  color: var(--foreground);
+}
+
+.job-skills-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 28px;
+}
+
+.job-skills-eyebrow {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  color: #64748b;
+}
+
+.job-skills-header h1 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 750;
+  letter-spacing: -0.8px;
+}
+
+.job-skills-header > div > p:last-child {
+  margin: 9px 0 0;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.job-skills-refresh,
+.job-skills-submit,
+.job-skills-cancel,
+.job-skills-edit,
+.job-skills-approve,
+.job-skills-reject {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.job-skills-refresh:hover,
+.job-skills-submit:hover,
+.job-skills-cancel:hover,
+.job-skills-edit:hover,
+.job-skills-approve:hover,
+.job-skills-reject:hover {
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+
+.job-skills-refresh {
+  color: #334155;
+  background: #e2e8f0;
+}
+
+.job-skills-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.job-skills-stat {
+  padding: 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: var(--card, #ffffff);
+}
+
+.job-skills-stat span {
+  display: block;
+  margin-bottom: 10px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.job-skills-stat strong {
+  font-size: 28px;
+  font-weight: 750;
+}
+
+.job-skills-panel {
+  margin-bottom: 24px;
+  padding: 24px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: var(--card, #ffffff);
+}
+
+.job-skills-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.job-skills-section-heading h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.job-skills-section-heading p {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.job-skills-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.job-skills-form label,
+.job-skills-filters label,
+.job-skills-approver label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.job-skills-form input,
+.job-skills-form select,
+.job-skills-filters select,
+.job-skills-approver select {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: var(--background, #ffffff);
+  color: var(--foreground, #0f172a);
+  font: inherit;
+  font-size: 14px;
+}
+
+.job-skills-form input:focus,
+.job-skills-form select:focus,
+.job-skills-filters select:focus,
+.job-skills-approver select:focus {
+  outline: 2px solid #93c5fd;
+  outline-offset: 1px;
+}
+
+.job-skills-form input:disabled,
+.job-skills-form select:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.job-skills-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
+.job-skills-submit {
+  color: #ffffff;
+  background: #2563eb;
+}
+
+.job-skills-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.job-skills-cancel {
+  color: #334155;
+  background: #e2e8f0;
+}
+
+.job-skills-alert {
+  margin-bottom: 18px;
+  padding: 13px 16px;
+  border-radius: 9px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.job-skills-alert.error {
+  color: #991b1b;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+}
+
+.job-skills-alert.success {
+  color: #166534;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
+}
+
+.job-skills-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 220px));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.job-skills-approver {
+  max-width: 440px;
+  margin-bottom: 22px;
+}
+
+.job-skills-approver p {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.job-skills-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.job-skills-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.job-skills-table th {
+  padding: 13px 12px;
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.job-skills-table td {
+  padding: 15px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  vertical-align: middle;
+}
+
+.job-skills-status {
+  display: inline-block;
+  padding: 5px 9px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.job-skills-status.pending {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.job-skills-status.approved {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.job-skills-status.rejected {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.job-skills-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.job-skills-edit {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.job-skills-approve {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.job-skills-reject {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.job-skills-empty {
+  padding: 24px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  color: #64748b;
+  text-align: center;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .job-skills-page {
+    padding: 22px;
+  }
+
+  .job-skills-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .job-skills-page {
+    padding: 16px;
+  }
+
+  .job-skills-header {
+    flex-direction: column;
+  }
+
+  .job-skills-header h1 {
+    font-size: 25px;
+  }
+
+  .job-skills-stats,
+  .job-skills-form,
+  .job-skills-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .job-skills-panel {
+    padding: 17px;
+  }
+
+  .job-skills-form-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* Training Needs Analysis dashboard */
+.tna-page {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 28px;
+  color: var(--foreground);
+}
+
+.tna-header, .tna-section-heading, .tna-ai-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.tna-header { margin-bottom: 28px; }
+.tna-header h1 { font-size: 30px; font-weight: 700; margin: 5px 0 8px; }
+.tna-header p, .tna-section-heading p, .tna-ai-header p {
+  color: var(--muted-foreground);
+  margin: 0;
+  font-size: 14px;
+}
+.tna-eyebrow { color: var(--muted-foreground); font-size: 11px; font-weight: 700; letter-spacing: 1.2px; }
+.tna-refresh, .tna-ai-button {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 15px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--card);
+  color: var(--foreground);
+}
+.tna-ai-button { background: var(--primary); color: white; border-color: var(--primary); }
+.tna-refresh:disabled, .tna-ai-button:disabled { opacity: .6; cursor: wait; }
+
+.tna-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.tna-stat, .tna-section, .tna-department-card, .tna-insight-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.tna-stat { padding: 20px; display: flex; flex-direction: column; gap: 9px; }
+.tna-stat > span { font-size: 13px; color: var(--muted-foreground); }
+.tna-stat strong { font-size: 30px; font-weight: 700; }
+.tna-stat small { color: var(--muted-foreground); font-size: 11px; line-height: 1.5; }
+
+.tna-coverage {
+  display: flex;
+  gap: 14px;
+  padding: 17px 20px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  margin-bottom: 25px;
+  background: var(--card);
+}
+.tna-coverage-warning { border-color: #d69b38; background: color-mix(in srgb, #d69b38 8%, var(--card)); }
+.tna-coverage-icon {
+  flex: 0 0 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #d69b38;
+  color: white;
+  font-weight: 800;
+}
+.tna-coverage strong { display: block; margin-bottom: 5px; }
+.tna-coverage p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted-foreground); }
+
+.tna-section { padding: 22px; margin-bottom: 24px; }
+.tna-section-heading { margin-bottom: 17px; }
+.tna-section-heading h2, .tna-ai-header h2 { font-size: 19px; font-weight: 700; margin: 0 0 5px; }
+.tna-count {
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 20px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+.tna-table-wrap { width: 100%; overflow-x: auto; }
+.tna-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+.tna-table th {
+  padding: 12px 14px;
+  color: var(--muted-foreground);
+  font-weight: 600;
+  background: var(--muted);
+  white-space: nowrap;
+}
+.tna-table td { padding: 13px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.tna-table tbody tr:last-child td { border-bottom: 0; }
+.tna-position-name { font-weight: 600; }
+.tna-status { display: inline-block; border-radius: 20px; padding: 5px 9px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.tna-status-good { background: #dcfce7; color: #166534; }
+.tna-status-warning { background: #fef3c7; color: #92400e; }
+
+.tna-department-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
+.tna-department-card { padding: 18px; }
+.tna-department-card h3 { font-size: 15px; font-weight: 700; margin: 0 0 17px; }
+.tna-department-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.tna-department-metrics div { display: flex; flex-direction: column; gap: 5px; }
+.tna-department-metrics strong { font-size: 21px; }
+.tna-department-metrics span { font-size: 11px; color: var(--muted-foreground); }
+.tna-common-gaps { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.tna-common-gaps > strong { display: block; font-size: 12px; margin-bottom: 10px; }
+.tna-common-gaps > p { font-size: 12px; color: var(--muted-foreground); }
+.tna-gap-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 12px; }
+.tna-gap-row span:last-child { color: var(--muted-foreground); white-space: nowrap; }
+
+.tna-ai-section { border: 1px solid var(--border); border-radius: 12px; padding: 24px; background: var(--card); }
+.tna-ai-header { margin-bottom: 20px; }
+.tna-ai-header h2 { margin-top: 5px; }
+.tna-ai-empty, .tna-loading {
+  text-align: center;
+  padding: 35px 15px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--muted-foreground);
+}
+.tna-ai-empty strong { display: block; color: var(--foreground); margin: 8px 0; }
+.tna-ai-empty p { font-size: 13px; margin: 0; }
+.tna-ai-sparkle { font-size: 25px; }
+.tna-insights { display: flex; flex-direction: column; gap: 15px; }
+.tna-insight-card { padding: 20px; min-width: 0; }
+.tna-insight-card h3 { font-size: 15px; font-weight: 700; margin: 0 0 13px; }
+.tna-insight-card > p, .tna-summary-card p { font-size: 13px; line-height: 1.7; color: var(--muted-foreground); margin: 0; }
+.tna-summary-card { border-left: 3px solid var(--primary); }
+.tna-insight-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
+.tna-finding, .tna-action { padding: 12px 0; border-top: 1px solid var(--border); }
+.tna-finding:first-of-type, .tna-action:first-of-type { border-top: 0; }
+.tna-finding strong, .tna-action strong { font-size: 13px; }
+.tna-finding p, .tna-action p { font-size: 12px; color: var(--muted-foreground); line-height: 1.6; margin: 6px 0 0; }
+.tna-action-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.tna-priority { font-size: 10px; font-weight: 700; padding: 4px 7px; border-radius: 12px; }
+.tna-priority-high { background: #fee2e2; color: #991b1b; }
+.tna-priority-medium { background: #fef3c7; color: #92400e; }
+.tna-priority-low { background: #dcfce7; color: #166534; }
+.tna-limitations { margin: 0; padding-left: 20px; color: var(--muted-foreground); font-size: 13px; line-height: 1.8; }
+.tna-review-note { margin-top: 14px !important; font-size: 11px !important; }
+.tna-alert { padding: 15px 17px; border-radius: 10px; margin: 15px 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.tna-alert-error { border: 1px solid #e5a1a1; background: #fff1f1; color: #8b2020; }
+.tna-alert button { align-self: flex-start; border: 1px solid currentColor; border-radius: 6px; padding: 5px 10px; background: transparent; color: inherit; cursor: pointer; }
+.tna-alert small { line-height: 1.5; }
+.tna-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding: 18px 2px; color: var(--muted-foreground); font-size: 11px; }
+
+@media (max-width: 900px) {
+  .tna-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tna-department-grid, .tna-insight-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .tna-page { padding: 16px; }
+  .tna-header, .tna-ai-header { align-items: flex-start; flex-direction: column; }
+  .tna-header h1 { font-size: 24px; }
+  .tna-stats { grid-template-columns: 1fr 1fr; gap: 9px; }
+  .tna-stat { padding: 14px; }
+  .tna-stat strong { font-size: 24px; }
+  .tna-section, .tna-ai-section { padding: 15px; }
+  .tna-section-heading { align-items: flex-start; }
+  .tna-department-metrics { gap: 5px; }
+}
+
+.job-skills-note {
+  margin: 14px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.job-skills-filters {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.job-skills-search {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: var(--background, #ffffff);
+  color: var(--foreground, #0f172a);
+  font: inherit;
+  font-size: 14px;
+}
+
+.job-skills-search:focus {
+  outline: 2px solid #93c5fd;
+  outline-offset: 1px;
+}
+
+@media (max-width: 600px) {
+  .job-skills-filters {
+    grid-template-columns: 1fr;
+  }
+}
+
+.skills-form-full {
+  grid-column: 1 / -1;
+}
+
+.skills-panel .job-skills-form textarea {
+  width: 100%;
+  min-height: 85px;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: var(--background, #fff);
+  color: var(--foreground, #0f172a);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.skills-panel .job-skills-form textarea:focus {
+  outline: 2px solid #93c5fd;
+  outline-offset: 1px;
+}
+
+.skills-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.skills-related-links {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.skills-related-links a {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 17px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  text-decoration: none;
+}
+
+.skills-related-links a strong {
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.skills-related-links a span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@media (max-width: 700px) {
+  .skills-related-links {
+    grid-template-columns: 1fr;
+  }
+
+  .skills-panel .job-skills-form {
+    grid-template-columns: 1fr;
+  }
+
+  .skills-form-full {
+    grid-column: auto;
+  }
+}

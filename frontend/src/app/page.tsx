@@ -8,14 +8,6 @@
     icon: "♙",
   },
   {
-    number: "02",
-    title: "Skills Management",
-    description: "Manage skill categories, competencies, proficiency levels, evidence and assessments.",
-    stage: "Definition",
-    status: "Next to implement",
-    icon: "◇",
-  },
-  {
     number: "03",
     title: "Training Need Analysis",
     description: "Identify employee skill gaps using roles, required skills, assessments and performance evidence.",
@@ -82,9 +74,11 @@ export default function Dashboard() {
         <a href="/imports" className="nav-item">▤ <span>Employee Imports</span></a>
         <div className="nav-label nav-spaced">MANAGEMENT</div>
         <div className="nav-item">♙ <span>Employees</span></div>
-        <div className="nav-item">◇ <span>Skills</span></div>
+        <a href="/skills" className="nav-item">? <span>Skills</span></a>
         <div className="nav-item">▣ <span>Courses</span></div>
-        <div className="nav-item">⌕ <span>Training Needs</span></div>
+        <a href="/assessments" className="nav-item">? <span>Assessments</span></a>
+        <a href="/job-requirements" className="nav-item">◇ <span>Job Requirements</span></a>
+        <a href="/tna" className="nav-item">⌕ <span>Training Needs</span></a>
         <div className="nav-item">▤ <span>Training Plans</span></div>
         <div className="nav-item">▷ <span>Execution</span></div>
         <div className="nav-item">▥ <span>Reports</span></div>
@@ -173,6 +167,50 @@ export default function Dashboard() {
               <div className="module-stage">DATA MANAGEMENT</div>
               <h3>Employee Imports</h3>
               <p>Import company employee data, review validation issues and manage corrections.</p>
+              <div className="module-link">Open module →</div>
+            </a>
+
+            <a href="/skills" className="module-card available-module">
+              <div className="module-card-top">
+                <span className="module-icon">?</span>
+                <span className="module-status available-status">Available</span>
+              </div>
+              <div className="module-stage">DEFINITION</div>
+              <h3>Skills Management</h3>
+              <p>Explore the skill catalogue, categories, competencies and proficiency reference information.</p>
+              <div className="module-link">Open module ?</div>
+            </a>
+
+            <a href="/assessments" className="module-card available-module">
+              <div className="module-card-top">
+                <span className="module-icon">?</span>
+                <span className="module-status available-status">Available</span>
+              </div>
+              <div className="module-stage">SKILLS DEVELOPMENT</div>
+              <h3>Assessment &amp; Evidence Management</h3>
+              <p>Record employee skill assessments, review supporting evidence and approve or reject proficiency records.</p>
+              <div className="module-link">Open module ?</div>
+            </a>
+
+            <a href="/job-requirements" className="module-card available-module">
+              <div className="module-card-top">
+                <span className="module-icon">◇</span>
+                <span className="module-status available-status">Available</span>
+              </div>
+              <div className="module-stage">DEFINITION</div>
+              <h3>Job Requirements</h3>
+              <p>Define required skills for each job position and review pending approvals.</p>
+              <div className="module-link">Open module →</div>
+            </a>
+
+            <a href="/tna" className="module-card available-module">
+              <div className="module-card-top">
+                <span className="module-icon">⌕</span>
+                <span className="module-status available-status">Available</span>
+              </div>
+              <div className="module-stage">TRAINING NEED ANALYSIS</div>
+              <h3>Training Needs Analysis</h3>
+              <p>Analyse employee skills, identify confirmed skill gaps and review training needs.</p>
               <div className="module-link">Open module →</div>
             </a>
 
