@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-
-const COMPANY_ID = 14;
+import { authenticatedFetch } from "../../lib/api";
+import { useAuth } from "../../components/auth-provider";
 
 type Employee = {
   id: number;
@@ -70,6 +70,7 @@ function isCurrentAssessment(assessment: Assessment) {
 }
 
 export default function EmployeeSkillsPage() {
+  const { activeMembership } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [assessments, setAssessments] = useState<Assessment[]>([]);
@@ -82,14 +83,14 @@ export default function EmployeeSkillsPage() {
     async function loadData() {
       try {
         const endpoints = [
-          `/api/employees?company_id=${COMPANY_ID}`,
+          "/api/employees",
           "/api/skills",
-          `/api/skill-assessments?company_id=${COMPANY_ID}`,
-          `/api/job-skills?company_id=${COMPANY_ID}`,
+          "/api/skill-assessments",
+          "/api/job-skills",
         ];
 
         const responses = await Promise.all(
-          endpoints.map((url) => fetch(url, { cache: "no-store" }))
+          endpoints.map((url) => authenticatedFetch(url, { cache: "no-store" }))
         );
 
         const failed = responses.find((response) => !response.ok);
@@ -116,15 +117,9 @@ export default function EmployeeSkillsPage() {
     loadData();
   }, []);
 
-  useEffect(() => {
-    if (!selectedEmployeeId && employees.length > 0) {
-      setSelectedEmployeeId(String(employees[0].id));
-    }
-  }, [employees, selectedEmployeeId]);
-
   const selectedEmployee = employees.find(
     (employee) => String(employee.id) === selectedEmployeeId
-  );
+  ) ?? employees[0];
 
   const employeeAssessments = useMemo(() => {
     if (!selectedEmployee) return [];
@@ -239,7 +234,9 @@ export default function EmployeeSkillsPage() {
                 approved role requirements.
               </p>
             </div>
-            <span className="workspace-badge">Company {COMPANY_ID}</span>
+            <span className="workspace-badge">
+              Company {activeMembership?.company_id ?? ""}
+            </span>
           </div>
 
           {loading && <div className="skills-message">Loading employee skill data...</div>}
@@ -261,7 +258,7 @@ export default function EmployeeSkillsPage() {
                 <div className="employee-skills-stat">
                   <span>Approved requirements</span>
                   <strong>{approvedRequirements.length}</strong>
-                  <small>For the selected employee's role</small>
+                  <small>For the selected employee&apos;s role</small>
                 </div>
                 <div className="employee-skills-stat">
                   <span>Identified skill gaps</span>
@@ -287,7 +284,7 @@ export default function EmployeeSkillsPage() {
                   <>
                     <select
                       className="employee-skills-select"
-                      value={selectedEmployeeId}
+                      value={selectedEmployee ? String(selectedEmployee.id) : ""}
                       onChange={(event) => setSelectedEmployeeId(event.target.value)}
                     >
                       {employees.map((employee) => (
@@ -339,7 +336,7 @@ export default function EmployeeSkillsPage() {
                     {employeeRequirements.length === 0 ? (
                       <div className="employee-skills-empty">
                         <strong>No role requirements found</strong>
-                        <p>No requirements currently match this employee's job title.</p>
+                        <p>No requirements currently match this employee&apos;s job title.</p>
                       </div>
                     ) : (
                       <div className="employee-skills-table-wrap">

@@ -71,8 +71,11 @@ class TrainingPlanResponse(BaseModel):
 
     approval_status: str
     approved_by: int | None = None
+    status_updated_by: int | None = None
+    status_updated_by_user_id: int | None = None
     approval_date: datetime | None = None
     approval_comments: str | None = None
 
     last_reviewed_at: datetime | None = None
     plan_review_notes: str | None = None
+    reviewed_by_user_id: int | None = None

@@ -1,9 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import (
+    AuthContext,
+    allowed_employee_ids,
+    ensure_employee_access,
+    get_auth_context,
+    get_db,
+    get_membership_employee,
+)
 
 from backend.app.db.employee import Employee
+from backend.app.db.course import Course
 from backend.app.db.course_session import CourseSession
 from backend.app.db.enrollment import Enrollment
 from backend.app.db.session_feedback import SessionFeedback
@@ -21,29 +29,44 @@ router = APIRouter(
 )
 
 
+def _feedback_query(db: Session, company_id: int):
+    return db.query(SessionFeedback).join(
+        CourseSession,
+        SessionFeedback.session_id == CourseSession.session_id,
+    ).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).join(
+        Employee,
+        SessionFeedback.employee_id == Employee.id,
+    ).filter(
+        SessionFeedback.company_id == company_id,
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
+        Employee.company_id == company_id,
+    )
+
+
 # 1. SUBMIT FEEDBACK
 @router.post("/", response_model=SessionFeedbackResponse, status_code=201)
 def create_session_feedback(
     company_id: int,
     employee_id: int,
     feedback_data: SessionFeedbackCreate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    employee = db.query(Employee).filter(
-        Employee.id == employee_id,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
+    if context.role == "Employee":
+        employee_id = get_membership_employee(context, db).id
+    employee = ensure_employee_access(context, db, employee_id)
 
-    if employee is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Employee not found in this company"
-        )
-
-    session = db.query(CourseSession).filter(
+    session = db.query(CourseSession).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).filter(
         CourseSession.session_id == feedback_data.session_id,
-        CourseSession.company_id == company_id
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
     ).first()
 
     if session is None:
@@ -58,8 +81,17 @@ def create_session_feedback(
             detail="Feedback can only be submitted after session completion"
         )
 
-    enrollment = db.query(Enrollment).filter(
+    enrollment = db.query(Enrollment).join(
+        CourseSession,
+        Enrollment.session_id == CourseSession.session_id,
+    ).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).filter(
         Enrollment.company_id == company_id,
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
+        Enrollment.course_id == Course.id,
         Enrollment.employee_id == employee_id,
         Enrollment.session_id == feedback_data.session_id,
         Enrollment.status == "Completed"
@@ -101,11 +133,13 @@ def get_session_feedback(
     company_id: int,
     session_id: int | None = None,
     employee_id: int | None = None,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    query = db.query(SessionFeedback).filter(
-        SessionFeedback.company_id == company_id
-    )
+    query = _feedback_query(db, company_id)
+    employee_ids = allowed_employee_ids(context, db)
+    if employee_ids is not None:
+        query = query.filter(SessionFeedback.employee_id.in_(employee_ids))
 
     if session_id is not None:
         query = query.filter(
@@ -127,11 +161,11 @@ def get_session_feedback(
 def get_feedback(
     feedback_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    feedback = db.query(SessionFeedback).filter(
+    feedback = _feedback_query(db, company_id).filter(
         SessionFeedback.feedback_id == feedback_id,
-        SessionFeedback.company_id == company_id
     ).first()
 
     if feedback is None:
@@ -140,6 +174,7 @@ def get_feedback(
             detail="Feedback record not found"
         )
 
+    ensure_employee_access(context, db, feedback.employee_id)
     return feedback
 
 
@@ -150,11 +185,14 @@ def update_feedback(
     company_id: int,
     employee_id: int,
     feedback_data: SessionFeedbackUpdate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    feedback = db.query(SessionFeedback).filter(
+    if context.role == "Employee":
+        employee_id = get_membership_employee(context, db).id
+    ensure_employee_access(context, db, employee_id)
+    feedback = _feedback_query(db, company_id).filter(
         SessionFeedback.feedback_id == feedback_id,
-        SessionFeedback.company_id == company_id,
         SessionFeedback.employee_id == employee_id
     ).first()
 

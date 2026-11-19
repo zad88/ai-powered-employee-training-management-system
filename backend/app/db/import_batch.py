@@ -16,6 +16,10 @@ class ImportBatch(Base):
         nullable=False,
         index=True
     )
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
 
     source_type: Mapped[str] = mapped_column(String(30), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False)

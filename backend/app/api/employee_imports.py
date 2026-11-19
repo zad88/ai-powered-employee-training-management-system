@@ -1,24 +1,55 @@
 import json
+import shutil
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import AuthContext, get_auth_context, get_db
 from backend.app.db.company import Company
 from backend.app.db.employee import Employee
 from backend.app.db.import_batch import ImportBatch
 from backend.app.db.import_row_issue import ImportRowIssue
 from backend.app.db.import_issue_correction import ImportIssueCorrection
-from backend.app.services.file_reader import read_tabular_file
+from backend.app.services.file_reader import (
+    SUPPORTED_EXTENSIONS,
+    WorksheetSelectionRequired,
+    read_tabular_file,
+)
 from backend.app.services.column_mapper import detect_employee_columns
-from backend.app.services.employee_validator import validate_employee_rows
 from backend.app.services.data_correction import correct_email, classify_duplicate_email
+from backend.app.services.employee_import_pipeline import (
+    APPROVED_DEFAULTS,
+    AVAILABLE_MAPPING_FIELDS,
+    build_employee_import_preview,
+    employee_model_values,
+    suggested_column_mapping,
+)
+from backend.app.services.odoo_client import (
+    OdooAuthenticationError,
+    OdooConfigurationError,
+    OdooError,
+    OdooFetchError,
+    OdooPermissionError,
+    OdooUnavailableError,
+    OdooClient,
+    OdooConfig,
+    normalize_odoo_employees,
+)
 
 
 router = APIRouter(
@@ -27,29 +58,9 @@ router = APIRouter(
 )
 
 MAX_FILE_SIZE = 20 * 1024 * 1024
-
-# This default was explicitly approved for the current employee dataset.
-APPROVED_DEFAULTS = {
-    "job_level": "Not specified",
-}
-
-# Only these standardized fields may be inserted into Employee.
-EMPLOYEE_FIELDS = {
-    "employee_id",
-    "full_name",
-    "email",
-    "job_title",
-    "department",
-    "manager_id",
-    "employment_status",
-    "working_hours_per_week",
-    "learning_hours_per_week",
-    "years_of_experience",
-    "hire_date",
-    "job_level",
-    "employment_type",
-    "preferred_learning_mode",
-}
+IMPORT_STORAGE_ROOT = (
+    Path(__file__).resolve().parents[2] / "data" / "imports"
+)
 
 
 def json_safe(value: Any) -> Any:
@@ -77,23 +88,141 @@ def save_batch_files(
     metadata: dict,
 ) -> list[Path]:
     """Save the source file and its processing metadata."""
-    storage_root = Path(__file__).resolve().parents[2] / "data" / "imports"
-
-    batch_directory = storage_root / str(company_id) / str(batch_id)
+    batch_directory = IMPORT_STORAGE_ROOT / str(company_id) / str(batch_id)
     batch_directory.mkdir(parents=True, exist_ok=False)
 
     extension = Path(filename).suffix.lower()
     source_path = batch_directory / f"source{extension}"
     metadata_path = batch_directory / "metadata.json"
 
-    source_path.write_bytes(file_content)
+    try:
+        source_path.write_bytes(file_content)
+        metadata_path.write_text(
+            json.dumps(json_safe(metadata), indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        shutil.rmtree(batch_directory, ignore_errors=True)
+        raise
 
-    metadata_path.write_text(
+    return [source_path, metadata_path]
+
+
+async def read_upload_limited(file: UploadFile) -> bytes:
+    content = bytearray()
+    while True:
+        remaining = MAX_FILE_SIZE + 1 - len(content)
+        chunk = await file.read(min(1024 * 1024, remaining))
+        if not chunk:
+            break
+        content.extend(chunk)
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail="The uploaded file exceeds the 20 MB limit.",
+            )
+    return bytes(content)
+
+
+def _safe_upload_filename(uploaded_name: str | None) -> str:
+    filename = (uploaded_name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    filename = filename.strip()
+    if (
+        not filename
+        or filename in {".", ".."}
+        or len(filename) > 255
+        or any(ord(character) < 32 for character in filename)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="A valid filename is required.",
+        )
+    return filename
+
+
+def _batch_directory(company_id: int, batch_id: int) -> Path:
+    return IMPORT_STORAGE_ROOT / str(company_id) / str(batch_id)
+
+
+def _read_batch_metadata(
+    batch: ImportBatch,
+    company_id: int,
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    batch_directory = _batch_directory(company_id, batch.id)
+    metadata_path = batch_directory / "metadata.json"
+    extension = Path(batch.file_name or "").suffix.lower()
+    source_path = batch_directory / f"source{extension}"
+
+    if not metadata_path.is_file() or not source_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Original source file or metadata not found.",
+        )
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if (
+        metadata.get("company_id") != company_id
+        or metadata.get("batch_id") != batch.id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Stored metadata does not match this batch.",
+        )
+    file_data = read_tabular_file(
+        source_path.read_bytes(),
+        batch.file_name or "",
+        sheet_name=metadata.get("worksheet"),
+    )
+    return metadata, file_data, metadata_path
+
+
+def _structured_mapping(
+    column_mapping: dict[str, str | None],
+) -> dict[str, dict[str, Any]]:
+    return {
+        column: {
+            "field": field,
+            "confidence": 1.0 if field else 0.0,
+            "match_type": "manual" if field else "unmapped",
+            "requires_review": False,
+        }
+        for column, field in column_mapping.items()
+    }
+
+
+def _combined_name_fields(
+    column_mapping: dict[str, str | None],
+) -> list[dict[str, Any]]:
+    first_name = next(
+        (column for column, field in column_mapping.items()
+         if field == "first_name"),
+        None,
+    )
+    last_name = next(
+        (column for column, field in column_mapping.items()
+         if field == "last_name"),
+        None,
+    )
+    if first_name is None or last_name is None:
+        return []
+    return [{
+        "field": "full_name",
+        "source_columns": [first_name, last_name],
+        "transformation": "combine_names",
+        "requires_review": False,
+    }]
+
+
+def _write_batch_metadata(
+    metadata_path: Path,
+    metadata: dict[str, Any],
+) -> None:
+    temporary_path = metadata_path.with_suffix(".tmp")
+    temporary_path.write_text(
         json.dumps(json_safe(metadata), indent=2),
         encoding="utf-8",
     )
-
-    return [source_path, metadata_path]
+    temporary_path.replace(metadata_path)
 
 
 def persist_issues(
@@ -124,6 +253,21 @@ def persist_issues(
                     if raw_value is not None
                     else None
                 ),
+                status=(
+                    "Resolved"
+                    if issue["type"].startswith("warning_")
+                    else "Open"
+                ),
+                resolved_at=(
+                    datetime.utcnow()
+                    if issue["type"].startswith("warning_")
+                    else None
+                ),
+                resolution_note=(
+                    "Informational validation warning recorded during import."
+                    if issue["type"].startswith("warning_")
+                    else None
+                ),
             )
         )
 
@@ -131,14 +275,423 @@ def persist_issues(
         db.add_all(records)
 
 
-@router.post("/upload")
-async def upload_employee_file(
-    company_id: int = Query(..., gt=0),
-    file: UploadFile = File(...),
+def replace_import_issues(
+    db: Session,
+    batch_id: int,
+    issues: list[dict],
+) -> None:
+    db.query(ImportRowIssue).filter(
+        ImportRowIssue.batch_id == batch_id
+    ).delete(synchronize_session=False)
+    persist_issues(db, batch_id, issues)
+
+
+def link_manager_references(db: Session, company_id: int) -> None:
+    employees = db.query(Employee).filter(
+        Employee.company_id == company_id,
+    ).all()
+    employee_by_code = {
+        employee.employee_id.strip().casefold(): employee
+        for employee in employees
+    }
+    employee_by_id = {employee.id: employee for employee in employees}
+
+    for employee in employees:
+        if employee.manager_internal_id is not None:
+            linked_manager = employee_by_id.get(employee.manager_internal_id)
+            if linked_manager is None or not linked_manager.is_active:
+                employee.manager_internal_id = None
+
+        manager_code = (employee.manager_id or "").strip().casefold()
+        if manager_code:
+            manager = employee_by_code.get(manager_code)
+            employee.manager_internal_id = (
+                manager.id
+                if manager and manager.id != employee.id and manager.is_active
+                else None
+            )
+
+
+class OdooFetchPreviewRequest(BaseModel):
+    include_archived: bool = False
+    odoo_company_id: int | None = None
+    employee_ids: list[int] | None = None
+    column_mapping: dict[str, str | None] | None = None
+
+
+def _safe_odoo_http_error(exc: OdooError) -> HTTPException:
+    if isinstance(exc, OdooConfigurationError):
+        status_code = 400
+    elif isinstance(exc, (OdooAuthenticationError, OdooPermissionError)):
+        status_code = 403
+    elif isinstance(exc, (OdooUnavailableError, OdooFetchError)):
+        status_code = 502
+    else:
+        status_code = 500
+    return HTTPException(status_code=status_code, detail=str(exc))
+
+
+def _odoo_existing_source_references(
+    db: Session,
+    company_id: int,
+    *,
+    exclude_batch_id: int | None = None,
+) -> set[str]:
+    employee_ids: set[str] = set()
+    batches = db.query(ImportBatch).filter(
+        ImportBatch.company_id == company_id,
+        ImportBatch.entity_type == "employee",
+        ImportBatch.source_type == "ODOO",
+    ).all()
+    for batch in batches:
+        if exclude_batch_id is not None and batch.id == exclude_batch_id:
+            continue
+        metadata_path = _batch_directory(company_id, batch.id) / "metadata.json"
+        if not metadata_path.is_file():
+            continue
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        source_map = metadata.get("odoo_employee_source_map", {})
+        if isinstance(source_map, dict):
+            for employee_id in source_map:
+                if isinstance(employee_id, str):
+                    employee_ids.add(employee_id.strip().casefold())
+        for reference in metadata.get("odoo_source_references", []):
+            if isinstance(reference, str):
+                suffix = reference.rsplit(":", 1)[-1]
+                employee_ids.add(f"odoo-{suffix}".casefold())
+    return employee_ids
+
+
+def _apply_odoo_source_conflicts(
+    db: Session,
+    company_id: int,
+    batch: ImportBatch,
+    preview: dict[str, Any],
+) -> dict[str, Any]:
+    existing = _odoo_existing_source_references(
+        db,
+        company_id,
+        exclude_batch_id=batch.id,
+    )
+    fallback_warnings: list[dict[str, Any]] = []
+
+    for row in preview["rows"]:
+        data = row["data"]
+        employee_id = data.get("employee_id")
+        source_key = (
+            str(employee_id).strip().casefold()
+            if employee_id is not None
+            else ""
+        )
+        if source_key and source_key in existing:
+            error = {
+                "row_number": row["row_number"],
+                "field": "_odoo_source_reference",
+                "type": "duplicate_odoo_source_reference",
+                "message": (
+                    "This Odoo employee source reference was already used "
+                    "by a previous import batch."
+                ),
+                "raw_value": employee_id,
+            }
+            row["errors"].append(error)
+            preview["errors"].append(error)
+            row["importable"] = False
+
+        if data.get("_odoo_employee_id_generated") is True:
+            warning = {
+                "row_number": row["row_number"],
+                "field": "employee_id",
+                "type": "odoo_generated_employee_id",
+                "message": (
+                    "Odoo did not provide identification_id or barcode; "
+                    "a visible stable ODOO-{record_id} employee ID was used."
+                ),
+            }
+            row["warnings"].append(warning)
+            fallback_warnings.append(warning)
+
+    preview["warnings"].extend(fallback_warnings)
+    preview["valid_rows"] = [
+        {"row_number": row["row_number"], "data": row["data"]}
+        for row in preview["rows"]
+        if not row["errors"]
+    ]
+    preview["summary"]["importable_rows"] = len(preview["valid_rows"])
+    preview["summary"]["invalid_rows"] = (
+        len(preview["rows"]) - len(preview["valid_rows"])
+    )
+    preview["summary"]["total_errors"] = len(preview["errors"])
+    preview["summary"]["total_warnings"] = len(preview["warnings"])
+    preview["summary"]["ready_for_confirmation"] = (
+        not preview["missing_mappings"]
+        and not any(
+            error.get("row_number") is None
+            for error in preview["errors"]
+        )
+    )
+    return preview
+
+
+@router.get("/odoo/status")
+def odoo_status(
+    context: AuthContext = Depends(get_auth_context),
+):
+    if context.role != "Training Manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only Training Managers may configure Odoo imports.",
+        )
+    try:
+        config = OdooConfig.from_env()
+    except OdooConfigurationError as exc:
+        return {
+            "configured": False,
+            "missing_configuration": str(exc),
+            "api_key_configured": False,
+        }
+    status = config.safe_status()
+    status["api_key_configured"] = bool(config.api_key)
+    status["api_key"] = None
+    return status
+
+
+@router.post("/odoo/test-connection")
+def test_odoo_connection(
+    context: AuthContext = Depends(get_auth_context),
+):
+    if context.role != "Training Manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only Training Managers may test Odoo imports.",
+        )
+    try:
+        result = OdooClient().test_connection()
+    except OdooError as exc:
+        raise _safe_odoo_http_error(exc) from exc
+    return {
+        "success": result["success"],
+        "server_version": result["server_version"],
+        "server_serie": result["server_serie"],
+        "database": result["database"],
+        "selected_adapter": result["selected_adapter"],
+        "employee_model_access": result["employee_model_access"],
+        "employee_count": result["employee_count"],
+        "available_employee_fields": result["available_employee_fields"],
+    }
+
+
+@router.get("/odoo/companies")
+def list_odoo_companies(
+    context: AuthContext = Depends(get_auth_context),
+):
+    if context.role != "Training Manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only Training Managers may view Odoo companies.",
+        )
+    try:
+        companies = OdooClient().get_companies()
+    except OdooError as exc:
+        raise _safe_odoo_http_error(exc) from exc
+    return {"companies": companies}
+
+
+@router.post("/odoo/fetch-preview")
+def fetch_odoo_preview(
+    request: OdooFetchPreviewRequest,
+    company_id: int | None = Query(default=None, gt=0),
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
+    effective_company_id = context.company_id
+    if context.role != "Training Manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only Training Managers may fetch Odoo employees.",
+        )
+    if company_id is not None and company_id != effective_company_id:
+        raise HTTPException(
+            status_code=403,
+            detail="The selected company is not an active membership.",
+        )
+
+    try:
+        config = OdooConfig.from_env()
+        client = OdooClient(config)
+        fetched = client.fetch_employees(
+            include_archived=request.include_archived,
+            odoo_company_id=request.odoo_company_id,
+            employee_ids=request.employee_ids,
+        )
+        columns, rows, suggested_mapping = normalize_odoo_employees(
+            fetched["records"],
+            odoo_database=config.database,
+        )
+        if request.column_mapping is not None:
+            unknown_columns = set(request.column_mapping) - set(columns)
+            if unknown_columns:
+                raise ValueError(
+                    "The mapping contains Odoo columns not in the fetched data."
+                )
+            mapping = request.column_mapping
+        else:
+            mapping = suggested_mapping
+
+        preview = build_employee_import_preview(
+            db,
+            effective_company_id,
+            columns,
+            rows,
+            mapping,
+        )
+    except OdooError as exc:
+        raise _safe_odoo_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    batch = ImportBatch(
+        company_id=effective_company_id,
+        created_by_user_id=context.user.user_id,
+        source_type="ODOO",
+        entity_type="employee",
+        file_name=(
+            f"odoo-{config.database}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.json"
+        ),
+        status="Awaiting preview",
+        total_rows=len(rows),
+        successful_rows=0,
+        failed_rows=0,
+    )
+    db.add(batch)
+    db.flush()
+
+    metadata = {
+        "company_id": effective_company_id,
+        "batch_id": batch.id,
+        "original_filename": batch.file_name,
+        "source_type": "ODOO",
+        "odoo_database": config.database,
+        "odoo_base_url": config.base_url,
+        "odoo_company_id": request.odoo_company_id,
+        "odoo_version": None,
+        "column_mapping_fields": mapping,
+        "column_mapping": _structured_mapping(mapping),
+        "combined_fields": _combined_name_fields(mapping),
+        "approved_defaults": APPROVED_DEFAULTS,
+        "odoo_source_references": [
+            row["_odoo_source_reference"] for row in rows
+        ],
+        "odoo_employee_source_map": {
+            str(row["employee_id"]).strip(): row["_odoo_source_reference"]
+            for row in rows
+            if row.get("employee_id")
+        },
+        "previewed": False,
+    }
+    try:
+        detected = detect_odoo_version(config)
+        metadata["odoo_version"] = detected["server_version"]
+    except OdooError:
+        pass
+
+    batch_directory = _batch_directory(effective_company_id, batch.id)
+    try:
+        save_batch_files(
+            company_id=effective_company_id,
+            batch_id=batch.id,
+            filename=batch.file_name,
+            file_content=json.dumps(
+                rows,
+                ensure_ascii=False,
+                indent=2,
+            ).encode("utf-8"),
+            metadata=metadata,
+        )
+    except (OSError, SQLAlchemyError) as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Could not stage the Odoo employee import.",
+        ) from exc
+
+    preview = _apply_odoo_source_conflicts(
+        db,
+        effective_company_id,
+        batch,
+        preview,
+    )
+    metadata["column_mapping_fields"] = preview["column_mapping"]
+    metadata["column_mapping"] = _structured_mapping(
+        preview["column_mapping"]
+    )
+    metadata["combined_fields"] = _combined_name_fields(
+        preview["column_mapping"]
+    )
+    metadata["previewed"] = True
+    _write_batch_metadata(
+        batch_directory / "metadata.json",
+        metadata,
+    )
+
+    persisted_issues = list(preview["errors"])
+    persisted_issues.extend(
+        {
+            **warning,
+            "type": f"warning_{warning['type']}",
+        }
+        for warning in preview["warnings"]
+    )
+    replace_import_issues(db, batch.id, persisted_issues)
+    batch.status = (
+        "Awaiting confirmation"
+        if preview["summary"]["ready_for_confirmation"]
+        else "Needs review"
+    )
+    batch.total_rows = len(rows)
+    db.commit()
+    db.refresh(batch)
+
+    return json_safe({
+        "batch_id": batch.id,
+        "company_id": effective_company_id,
+        "filename": batch.file_name,
+        "status": batch.status,
+        "source_type": "ODOO",
+        "odoo_database": config.database,
+        "odoo_company_id": request.odoo_company_id,
+        "odoo_version": metadata["odoo_version"],
+        "odoo_company_count": None,
+        "total_fetched": fetched["total"],
+        "columns": columns,
+        "column_mapping": mapping,
+        "available_fields": AVAILABLE_MAPPING_FIELDS,
+        "available_sheets": [],
+        "worksheet": None,
+        **preview,
+    })
+
+
+@router.post("/upload")
+async def upload_employee_file(
+    company_id: int | None = Query(default=None, gt=0),
+    file: UploadFile = File(...),
+    sheet_name: str | None = Form(default=None),
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    effective_company_id = context.company_id
+    if company_id is not None and company_id != effective_company_id:
+        raise HTTPException(
+            status_code=403,
+            detail="The selected company is not an active membership.",
+        )
+
     company = db.query(Company).filter(
-        Company.company_id == company_id
+        Company.company_id == effective_company_id
     ).first()
 
     if company is None:
@@ -147,273 +700,449 @@ async def upload_employee_file(
             detail="Company not found.",
         )
 
-    filename = Path(file.filename or "").name
-
-    if not filename:
-        raise HTTPException(
-            status_code=400,
-            detail="A filename is required.",
-        )
-
+    filename = _safe_upload_filename(file.filename)
     extension = Path(filename).suffix.lower()
-
-    if extension not in {".csv", ".xlsx"}:
+    if extension not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="Only CSV and XLSX files are supported.",
+            detail="Only CSV, XLSX, XLS, and JSON files are supported.",
+        )
+    if sheet_name and extension not in {".xlsx", ".xls"}:
+        raise HTTPException(
+            status_code=422,
+            detail="Worksheet selection is only valid for Excel files.",
         )
 
-    stored_paths: list[Path] = []
-
+    batch_directory = None
+    storage_created = False
+    committed = False
     try:
-        file_content = await file.read()
-
+        file_content = await read_upload_limited(file)
         if not file_content:
             raise HTTPException(
                 status_code=400,
                 detail="The uploaded file is empty.",
             )
 
-        if len(file_content) > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=413,
-                detail="The uploaded file exceeds the 20 MB limit.",
-            )
-
-        file_data = read_tabular_file(file_content, filename)
-
-        mapping_result = detect_employee_columns(
-            file_data["columns"]
+        file_data = read_tabular_file(
+            file_content,
+            filename,
+            sheet_name=sheet_name,
+            require_sheet_selection=True,
         )
-
-        validation_result = validate_employee_rows(
-            rows=file_data["rows"],
-            suggestions=mapping_result["suggestions"],
-            combined_fields=mapping_result["combined_fields"],
-            approved_defaults=APPROVED_DEFAULTS,
-        )
-
+        detection = detect_employee_columns(file_data["columns"])
+        mapping_fields = suggested_column_mapping(file_data["columns"])
         batch = ImportBatch(
-            company_id=company_id,
-            source_type="CSV" if extension == ".csv" else "Excel",
+            company_id=effective_company_id,
+            created_by_user_id=context.user.user_id,
+            source_type=extension.lstrip(".").upper(),
             entity_type="employee",
             file_name=filename,
-            status="Processing",
-            total_rows=validation_result["summary"]["total_rows"],
+            status="Awaiting preview",
+            total_rows=file_data["total_rows"],
             successful_rows=0,
             failed_rows=0,
         )
-
         db.add(batch)
         db.flush()
 
         metadata = {
-            "company_id": company_id,
+            "company_id": effective_company_id,
             "batch_id": batch.id,
             "original_filename": filename,
             "source_type": file_data["file_type"],
-            "column_mapping": mapping_result["suggestions"],
-            "combined_fields": mapping_result["combined_fields"],
+            "column_mapping": detection["suggestions"],
+            "column_mapping_fields": mapping_fields,
+            "combined_fields": _combined_name_fields(mapping_fields),
             "approved_defaults": APPROVED_DEFAULTS,
+            "worksheet": file_data["worksheet"],
+            "previewed": False,
         }
-
-        stored_paths = save_batch_files(
-            company_id=company_id,
+        batch_directory = _batch_directory(effective_company_id, batch.id)
+        save_batch_files(
+            company_id=effective_company_id,
             batch_id=batch.id,
             filename=filename,
             file_content=file_content,
             metadata=metadata,
         )
-
-        validation_errors = list(validation_result["errors"])
-        database_errors = []
-        imported_count = 0
-
-        # Do not import anything if mappings are uncertain or
-        # required fields have not been mapped.
-        requires_review = (
-            mapping_result["requires_manual_review"]
-            or bool(validation_result["missing_mappings"])
-        )
-
-        if not requires_review:
-            valid_rows = validation_result["valid_rows"]
-
-            employee_ids = {
-                str(item["data"]["employee_id"])
-                for item in valid_rows
-            }
-
-            emails = {
-                str(item["data"]["email"]).lower()
-                for item in valid_rows
-            }
-
-            existing_ids = set()
-            existing_emails = set()
-
-            if employee_ids:
-                existing_ids = {
-                    value
-                    for (value,) in db.query(Employee.employee_id).filter(
-                        Employee.company_id == company_id,
-                        Employee.employee_id.in_(employee_ids),
-                    ).all()
-                }
-
-            if emails:
-                existing_emails = {
-                    value.lower()
-                    for (value,) in db.query(
-                        func.lower(Employee.email)
-                    ).filter(
-                        Employee.company_id == company_id,
-                        func.lower(Employee.email).in_(emails),
-                    ).all()
-                }
-
-            employees_to_insert = []
-
-            for item in valid_rows:
-                data = item["data"]
-                row_number = item["row_number"]
-
-                employee_id = str(data["employee_id"])
-                email = str(data["email"]).lower()
-
-                if employee_id in existing_ids:
-                    database_errors.append({
-                        "row_number": row_number,
-                        "field": "employee_id",
-                        "type": "duplicate_in_database",
-                        "message": (
-                            f"Employee ID '{employee_id}' "
-                            "already exists in this company."
-                        ),
-                    })
-                    continue
-
-                if email in existing_emails:
-                    database_errors.append({
-                        "row_number": row_number,
-                        "field": "email",
-                        "type": "duplicate_in_database",
-                        "message": (
-                            f"Email '{email}' already exists "
-                            "in this company."
-                        ),
-                    })
-                    continue
-
-                # Whitelist model fields. In particular, manager_name,
-                # first_name, last_name and email_original are excluded.
-                employee_data = {
-                    key: value
-                    for key, value in data.items()
-                    if key in EMPLOYEE_FIELDS
-                }
-
-                employees_to_insert.append(
-                    Employee(
-                        **employee_data,
-                        company_id=company_id,
-                    )
-                )
-
-                existing_ids.add(employee_id)
-                existing_emails.add(email)
-
-            if employees_to_insert:
-                db.add_all(employees_to_insert)
-                db.flush()
-                imported_count = len(employees_to_insert)
-
-        all_errors = validation_errors + database_errors
-
-        # Persist errors only. Approved-default warnings are returned
-        # in the response but are not stored as thousands of issue rows.
-        persist_issues(db, batch.id, all_errors)
-
-        batch.successful_rows = imported_count
-        batch.failed_rows = (
-            validation_result["summary"]["invalid_rows"]
-            + len(database_errors)
-        )
-
-        if requires_review:
-            batch.status = "Needs review"
-        elif batch.failed_rows:
-            batch.status = "Completed with errors"
-        else:
-            batch.status = "Completed"
-
-        batch.completed_at = datetime.utcnow()
-
+        storage_created = True
         db.commit()
+        committed = True
         db.refresh(batch)
 
         return json_safe({
-            "message": (
-                "Import held for mapping review."
-                if requires_review
-                else "Employee import completed."
-            ),
+            "message": "File uploaded. Review the field mapping and preview before confirming.",
             "batch_id": batch.id,
-            "company_id": company_id,
+            "company_id": effective_company_id,
             "filename": filename,
             "status": batch.status,
-            "storage": "Original file and metadata saved.",
-            "approved_defaults": APPROVED_DEFAULTS,
-            "summary": {
-                "total_rows": batch.total_rows,
-                "imported_rows": batch.successful_rows,
-                "failed_rows": batch.failed_rows,
-                "validation_errors": len(validation_errors),
-                "database_duplicates": len(database_errors),
-                "total_errors": len(all_errors),
-                "mapping_review_required": requires_review,
-            },
-            "column_mapping": mapping_result["suggestions"],
-            "combined_fields": mapping_result["combined_fields"],
-            "unmatched_columns": mapping_result["unmatched_columns"],
-            "missing_mappings": validation_result["missing_mappings"],
-            "error_counts": build_issue_counts(all_errors),
-            "errors": all_errors,
-            "warning_counts": build_issue_counts(
-                validation_result["warnings"]
-            ),
+            "source_type": file_data["file_type"],
+            "total_rows": batch.total_rows,
+            "columns": file_data["columns"],
+            "column_mapping": mapping_fields,
+            "available_fields": AVAILABLE_MAPPING_FIELDS,
+            "unmatched_columns": detection["unmatched_columns"],
+            "available_sheets": file_data["available_sheets"],
+            "worksheet": file_data["worksheet"],
         })
 
+    except WorksheetSelectionRequired as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "worksheet_selection_required",
+                "message": str(exc),
+                "available_sheets": exc.sheet_names,
+            },
+        ) from exc
     except HTTPException:
         db.rollback()
-        for path in stored_paths:
-            path.unlink(missing_ok=True)
+        if storage_created and batch_directory is not None:
+            shutil.rmtree(batch_directory, ignore_errors=True)
         raise
 
     except ValueError as exc:
         db.rollback()
-        for path in stored_paths:
-            path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=400,
             detail=str(exc),
         ) from exc
 
-    except Exception as exc:
+    except (OSError, SQLAlchemyError) as exc:
         db.rollback()
-        for path in stored_paths:
-            path.unlink(missing_ok=True)
-
         raise HTTPException(
             status_code=500,
-            detail=(
-                "The employee import failed. "
-                "No database changes were committed."
-            ),
+            detail="Could not stage the employee import.",
         ) from exc
 
     finally:
+        if not committed:
+            db.rollback()
+            if storage_created and batch_directory is not None:
+                shutil.rmtree(batch_directory, ignore_errors=True)
         await file.close()
+
+
+class ImportPreviewRequest(BaseModel):
+    column_mapping: dict[str, str | None] | None = None
+
+
+class ImportConfirmationRequest(BaseModel):
+    confirmed: bool
+
+
+def _get_company_batch(
+    db: Session,
+    batch_id: int,
+    company_id: int,
+    *,
+    lock: bool = False,
+) -> ImportBatch:
+    query = db.query(ImportBatch).filter(
+        ImportBatch.id == batch_id,
+        ImportBatch.company_id == company_id,
+        ImportBatch.entity_type == "employee",
+    )
+    if lock:
+        query = query.with_for_update()
+    batch = query.first()
+    if batch is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Employee import batch not found.",
+        )
+    return batch
+
+
+@router.get("/history")
+def list_employee_import_history(
+    company_id: int | None = Query(default=None, gt=0),
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    effective_company_id = context.company_id
+    if company_id is not None and company_id != effective_company_id:
+        raise HTTPException(
+            status_code=403,
+            detail="The selected company is not an active membership.",
+        )
+
+    batches = db.query(ImportBatch).filter(
+        ImportBatch.company_id == effective_company_id,
+        ImportBatch.entity_type == "employee",
+    ).order_by(
+        ImportBatch.created_at.desc(),
+        ImportBatch.id.desc(),
+    ).limit(50).all()
+
+    return {
+        "company_id": effective_company_id,
+        "batches": [
+            {
+                "batch_id": batch.id,
+                "file_name": batch.file_name,
+                "source_type": batch.source_type,
+                "uploaded_by_user_id": batch.created_by_user_id,
+                "uploaded_at": (
+                    batch.created_at.isoformat()
+                    if batch.created_at else None
+                ),
+                "status": batch.status,
+                "total_rows": batch.total_rows,
+                "successful_rows": batch.successful_rows,
+                "failed_rows": batch.failed_rows,
+                "completed_at": (
+                    batch.completed_at.isoformat()
+                    if batch.completed_at else None
+                ),
+            }
+            for batch in batches
+        ],
+    }
+
+
+@router.post("/{batch_id}/preview")
+def preview_employee_import(
+    batch_id: int,
+    request: ImportPreviewRequest,
+    company_id: int | None = Query(default=None, gt=0),
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    effective_company_id = context.company_id
+    if company_id is not None and company_id != effective_company_id:
+        raise HTTPException(
+            status_code=403,
+            detail="The selected company is not an active membership.",
+        )
+
+    batch = _get_company_batch(db, batch_id, effective_company_id)
+    if batch.status not in {
+        "Awaiting preview",
+        "Awaiting confirmation",
+        "Needs review",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="This batch is no longer available for preview.",
+        )
+
+    try:
+        metadata, file_data, metadata_path = _read_batch_metadata(
+            batch,
+            effective_company_id,
+        )
+        preview = build_employee_import_preview(
+            db,
+            effective_company_id,
+            file_data["columns"],
+            file_data["rows"],
+            request.column_mapping,
+        )
+        if batch.source_type == "ODOO":
+            preview = _apply_odoo_source_conflicts(
+                db,
+                effective_company_id,
+                batch,
+                preview,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    metadata["column_mapping_fields"] = preview["column_mapping"]
+    metadata["column_mapping"] = _structured_mapping(
+        preview["column_mapping"]
+    )
+    metadata["combined_fields"] = _combined_name_fields(
+        preview["column_mapping"]
+    )
+    metadata["previewed"] = True
+    _write_batch_metadata(metadata_path, metadata)
+
+    persisted_issues = list(preview["errors"])
+    persisted_issues.extend(
+        {
+            **warning,
+            "type": f"warning_{warning['type']}",
+        }
+        for warning in preview["warnings"]
+    )
+    replace_import_issues(db, batch.id, persisted_issues)
+    batch.status = (
+        "Awaiting confirmation"
+        if preview["summary"]["ready_for_confirmation"]
+        else "Needs review"
+    )
+    db.commit()
+
+    return json_safe({
+        "batch_id": batch.id,
+        "company_id": effective_company_id,
+        "file_name": batch.file_name,
+        "source_type": batch.source_type,
+        "worksheet": file_data["worksheet"],
+        **preview,
+    })
+
+
+@router.post("/{batch_id}/confirm")
+def confirm_employee_import(
+    batch_id: int,
+    request: ImportConfirmationRequest,
+    company_id: int | None = Query(default=None, gt=0),
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    effective_company_id = context.company_id
+    if company_id is not None and company_id != effective_company_id:
+        raise HTTPException(
+            status_code=403,
+            detail="The selected company is not an active membership.",
+        )
+    if not request.confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Explicit confirmation is required before importing.",
+        )
+
+    batch = _get_company_batch(
+        db,
+        batch_id,
+        effective_company_id,
+        lock=True,
+    )
+    if batch.status != "Awaiting confirmation":
+        raise HTTPException(
+            status_code=409,
+            detail="Preview and resolve mapping errors before confirming.",
+        )
+
+    try:
+        metadata, file_data, _ = _read_batch_metadata(
+            batch,
+            effective_company_id,
+        )
+        if not metadata.get("previewed"):
+            raise HTTPException(
+                status_code=409,
+                detail="Generate a preview before confirming this import.",
+            )
+
+        preview = build_employee_import_preview(
+            db,
+            effective_company_id,
+            file_data["columns"],
+            file_data["rows"],
+            metadata.get("column_mapping_fields"),
+        )
+        if batch.source_type == "ODOO":
+            preview = _apply_odoo_source_conflicts(
+                db,
+                effective_company_id,
+                batch,
+                preview,
+            )
+        if not preview["summary"]["ready_for_confirmation"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Resolve required mappings before confirming.",
+                    "missing_mappings": preview["missing_mappings"],
+                    "errors": [
+                        error for error in preview["errors"]
+                        if error.get("row_number") is None
+                    ],
+                },
+            )
+
+        employees_to_insert = [
+            Employee(
+                **employee_model_values(row["data"]),
+                company_id=effective_company_id,
+            )
+            for row in preview["valid_rows"]
+        ]
+        db.add_all(employees_to_insert)
+        db.flush()
+
+        company_employees = db.query(Employee).filter(
+            Employee.company_id == effective_company_id,
+            Employee.is_active.is_(True),
+        ).all()
+        employees_by_code = {
+            employee.employee_id.strip().casefold(): employee
+            for employee in company_employees
+        }
+        for employee in employees_to_insert:
+            manager_code = (employee.manager_id or "").strip().casefold()
+            if not manager_code:
+                continue
+            manager = employees_by_code.get(manager_code)
+            if manager is None or manager.id == employee.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "A manager relationship changed after preview; "
+                        "preview the batch again."
+                    ),
+                )
+            employee.manager_internal_id = manager.id
+
+        persisted_issues = list(preview["errors"])
+        persisted_issues.extend(
+            {
+                **warning,
+                "type": f"warning_{warning['type']}",
+            }
+            for warning in preview["warnings"]
+        )
+        replace_import_issues(db, batch.id, persisted_issues)
+
+        batch.successful_rows = len(employees_to_insert)
+        batch.failed_rows = batch.total_rows - batch.successful_rows
+        batch.status = (
+            "Completed with errors"
+            if batch.failed_rows
+            else "Completed"
+        )
+        batch.completed_at = datetime.utcnow()
+        db.commit()
+        db.refresh(batch)
+
+        return json_safe({
+            "message": "Employee import confirmed.",
+            "batch_id": batch.id,
+            "company_id": effective_company_id,
+            "status": batch.status,
+            "summary": {
+                "total_rows": batch.total_rows,
+                "successful_rows": batch.successful_rows,
+                "failed_rows": batch.failed_rows,
+                "total_errors": len(preview["errors"]),
+                "total_warnings": len(preview["warnings"]),
+            },
+            "errors": preview["errors"],
+            "warnings": preview["warnings"],
+        })
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Employee data changed after preview. Review the batch again "
+                "before retrying."
+            ),
+        ) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="The employee import could not be committed.",
+        ) from exc
 
 
 class ImportIssueCorrectionRequest(BaseModel):
@@ -480,6 +1209,7 @@ def correct_import_issue(
     issue_id: int,
     correction: ImportIssueCorrectionRequest,
     company_id: int = Query(..., gt=0),
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
     batch = db.query(ImportBatch).filter(
@@ -549,6 +1279,7 @@ def correct_import_issue(
         status="Approved",
         resolution_note=correction.resolution_note,
         reviewed_at=datetime.utcnow(),
+        reviewed_by_user_id=context.user.user_id,
     )
     db.add(audit_record)
 
@@ -616,11 +1347,7 @@ def reprocess_employee_import(
             issue.row_number for issue in open_issues
         }
 
-        storage_root = (
-            Path(__file__).resolve().parents[2]
-            / "data" / "imports"
-        )
-        batch_directory = storage_root / str(company_id) / str(batch_id)
+        batch_directory = _batch_directory(company_id, batch_id)
         metadata_path = batch_directory / "metadata.json"
 
         extension = Path(batch.file_name or "").suffix.lower()
@@ -648,6 +1375,7 @@ def reprocess_employee_import(
         file_data = read_tabular_file(
             source_path.read_bytes(),
             batch.file_name,
+            sheet_name=metadata.get("worksheet"),
         )
 
         suggestions = metadata.get("column_mapping", {})
@@ -809,6 +1537,7 @@ def reprocess_employee_import(
         if employees_to_insert:
             db.add_all(employees_to_insert)
             db.flush()
+            link_manager_references(db, company_id)
 
         # Create newly discovered issues without duplicating existing ones.
         all_batch_issues = db.query(ImportRowIssue).filter(
@@ -987,11 +1716,7 @@ def preview_import_corrections(
             detail="Employee import batch not found.",
         )
 
-    storage_root = (
-        Path(__file__).resolve().parents[2]
-        / "data" / "imports"
-    )
-    batch_directory = storage_root / str(company_id) / str(batch_id)
+    batch_directory = _batch_directory(company_id, batch_id)
     metadata_path = batch_directory / "metadata.json"
 
     extension = Path(batch.file_name or "").suffix.lower()
@@ -1019,6 +1744,7 @@ def preview_import_corrections(
     file_data = read_tabular_file(
         source_path.read_bytes(),
         batch.file_name,
+        sheet_name=metadata.get("worksheet"),
     )
 
     email_columns = [

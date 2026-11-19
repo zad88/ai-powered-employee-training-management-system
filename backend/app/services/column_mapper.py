@@ -37,11 +37,12 @@ EMPLOYEE_FIELD_ALIASES = {
     ],
     "manager_id": [
         "manager_id", "manager id", "supervisor id",
-        "reporting manager id",
+        "reporting manager id", "manager employee id",
+        "supervisor employee id", "manager code",
     ],
     "manager_name": [
         "manager", "manager name", "supervisor",
-        "supervisor name", "reporting manager",
+        "supervisor name", "reporting manager", "manager full name",
     ],
     "employment_status": [
         "employment_status", "employment status",
@@ -70,6 +71,10 @@ EMPLOYEE_FIELD_ALIASES = {
     "years_of_experience": [
         "years of experience", "experience years",
         "years_of_experience",
+    ],
+    "preferred_learning_mode": [
+        "preferred_learning_mode", "preferred learning mode",
+        "learning preference", "preferred learning method",
     ],
 }
 

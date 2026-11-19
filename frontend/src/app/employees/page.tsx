@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { authenticatedFetch } from "../../lib/api";
+import { useAuth } from "../../components/auth-provider";
 
 type Employee = {
   id: number;
@@ -24,10 +26,10 @@ type Employee = {
   is_active: boolean;
 };
 
-const COMPANY_ID = 14;
 const PAGE_SIZE = 12;
 
 export default function EmployeesPage() {
+  const { activeMembership } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -42,8 +44,8 @@ export default function EmployeesPage() {
         setLoading(true);
         setError("");
 
-        const response = await fetch(
-          `/api/employees?company_id=${COMPANY_ID}`,
+        const response = await authenticatedFetch(
+          "/api/employees",
           { cache: "no-store" }
         );
 
@@ -158,9 +160,11 @@ export default function EmployeesPage() {
             <div>
               <div className="eyebrow">PEOPLE MANAGEMENT</div>
               <h1>Employees</h1>
-              <p>View and explore your organization's employee records.</p>
+              <p>View and explore your organization&apos;s employee records.</p>
             </div>
-            <span className="workspace-badge">Company #{COMPANY_ID}</span>
+            <span className="workspace-badge">
+              Company #{activeMembership?.company_id ?? ""}
+            </span>
           </div>
 
           <section className="employee-stats">

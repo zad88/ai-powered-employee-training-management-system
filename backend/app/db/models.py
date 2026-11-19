@@ -20,3 +20,6 @@ from backend.app.db.import_mapping_profile import ImportMappingProfile
 from backend.app.db.historical_training_record import HistoricalTrainingRecord
 
 from backend.app.db.import_issue_correction import ImportIssueCorrection
+
+from backend.app.db.auth_models import User, UserCompanyRole
+from backend.app.db.revoked_access_token import RevokedAccessToken

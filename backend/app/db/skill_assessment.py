@@ -1,5 +1,4 @@
-
-from datetime import date
+﻿from datetime import date
 
 from sqlalchemy import (
     Date,
@@ -34,6 +33,23 @@ class SkillAssessment(Base):
         index=True
     )
 
+    assessed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"),
+        nullable=True,
+    )
+    assessed_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
+    reviewed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"),
+        nullable=True,
+    )
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
+
     skill_id: Mapped[int] = mapped_column(
         ForeignKey("skills.skill_id"),
         nullable=False
@@ -60,6 +76,16 @@ class SkillAssessment(Base):
         default="Medium"
     )
 
+    evidence_title: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True
+    )
+
+    evidence_description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True
+    )
+
     assessment_date: Mapped[date] = mapped_column(
         Date,
         nullable=False
@@ -81,13 +107,12 @@ class SkillAssessment(Base):
         default="Pending Review"
     )
 
-    # Employee who received the assessment
     employee = relationship(
         "Employee",
-        back_populates="skill_assessments"
+        back_populates="skill_assessments",
+        foreign_keys=[employee_id],
     )
 
-    # Skill being assessed
     skill = relationship(
         "Skill",
         back_populates="assessments"

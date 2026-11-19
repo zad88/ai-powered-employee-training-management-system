@@ -38,6 +38,10 @@ class TrainingPlan(Base):
         ForeignKey("employees.id"),
         nullable=True
     )
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -101,6 +105,18 @@ class TrainingPlan(Base):
         ForeignKey("employees.id"),
         nullable=True
     )
+    approved_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
+    status_updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"),
+        nullable=True,
+    )
+    status_updated_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
 
     approval_date: Mapped[datetime | None] = mapped_column(
         DateTime,
@@ -120,6 +136,10 @@ class TrainingPlan(Base):
     plan_review_notes: Mapped[str | None] = mapped_column(
         String(1000),
         nullable=True
+    )
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
     )
 
     # Employee receiving the training plan

@@ -1,4 +1,9 @@
-﻿const modules = [
+"use client";
+
+import { useAuth } from "../components/auth-provider";
+import Link from "next/link";
+
+const modules = [
   {
     number: "01",
     title: "Employee Management",
@@ -58,19 +63,20 @@ const stages = [
 ];
 
 export default function Dashboard() {
+  const { activeMembership } = useAuth();
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <a href="/" className="brand">
+        <Link href="/" className="brand">
           <div className="brand-icon">T</div>
           <div>
             <strong>TalentFlow</strong>
             <span>Training Management</span>
           </div>
-        </a>
+        </Link>
 
         <div className="nav-label">WORKSPACE</div>
-        <a href="/" className="nav-item active">▦ <span>Overview</span></a>
+        <Link href="/" className="nav-item active">▦ <span>Overview</span></Link>
         <a href="/imports" className="nav-item">▤ <span>Employee Imports</span></a>
         <div className="nav-label nav-spaced">MANAGEMENT</div>
         <div className="nav-item">♙ <span>Employees</span></div>
@@ -106,9 +112,11 @@ export default function Dashboard() {
             <div>
               <div className="eyebrow">MAIN WORKSPACE</div>
               <h1>Training Management Dashboard</h1>
-              <p>Manage your organization's employee development and training lifecycle.</p>
+              <p>Manage your organization&apos;s employee development and training lifecycle.</p>
             </div>
-            <span className="workspace-badge">Training Manager</span>
+            <span className="workspace-badge">
+              {activeMembership?.role ?? "Company member"}
+            </span>
           </div>
 
           <section className="welcome-panel">

@@ -1,11 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import (
+    AuthContext,
+    get_auth_context,
+    get_db,
+    get_membership_employee,
+)
 from backend.app.db.course import Course
 from backend.app.db.course_skill import CourseSkill
 from backend.app.db.skill import Skill
-from backend.app.db.employee import Employee
 from backend.app.schemas.course_skill import (
     CourseSkillCreate,
     CourseSkillApproval,
@@ -80,8 +84,12 @@ def get_course_skills(
     approval_status: str | None = None,
     db: Session = Depends(get_db)
 ):
-    query = db.query(CourseSkill).filter(
-        CourseSkill.company_id == company_id
+    query = db.query(CourseSkill).join(
+        Course,
+        CourseSkill.course_id == Course.id,
+    ).filter(
+        CourseSkill.company_id == company_id,
+        Course.company_id == company_id,
     )
 
     if course_id is not None:
@@ -103,12 +111,16 @@ def approve_course_skill(
     association_id: int,
     company_id: int,
     approval_data: CourseSkillApproval,
-    approved_by: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    association = db.query(CourseSkill).filter(
+    association = db.query(CourseSkill).join(
+        Course,
+        CourseSkill.course_id == Course.id,
+    ).filter(
         CourseSkill.id == association_id,
-        CourseSkill.company_id == company_id
+        CourseSkill.company_id == company_id,
+        Course.company_id == company_id,
     ).first()
 
     if association is None:
@@ -117,20 +129,10 @@ def approve_course_skill(
             detail="Course-skill association not found"
         )
 
-    manager = db.query(Employee).filter(
-        Employee.id == approved_by,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if manager is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Approving employee not found in this company"
-        )
-
     association.approval_status = approval_data.approval_status
-    association.approved_by = manager.id
+    approver = get_membership_employee(context, db, required=False)
+    association.approved_by = approver.id if approver else None
+    association.approved_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(association)

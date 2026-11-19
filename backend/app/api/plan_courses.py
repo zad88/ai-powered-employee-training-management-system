@@ -1,7 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import (
+    AuthContext,
+    ensure_employee_access,
+    get_auth_context,
+    get_db,
+)
 
 from backend.app.db.training_plan import TrainingPlan
 from backend.app.db.course import Course
@@ -25,6 +30,7 @@ router = APIRouter(
 def add_course_to_plan(
     company_id: int,
     course_data: PlanCourseCreate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
     plan = db.query(TrainingPlan).filter(
@@ -38,6 +44,7 @@ def add_course_to_plan(
             detail="Training plan not found"
         )
 
+    ensure_employee_access(context, db, plan.employee_id)
     if plan.plan_status != "Draft" or plan.approval_status != "Pending":
         raise HTTPException(
             status_code=400,
@@ -92,6 +99,7 @@ def add_course_to_plan(
 def get_plan_courses(
     company_id: int,
     plan_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
     plan = db.query(TrainingPlan).filter(
@@ -105,8 +113,13 @@ def get_plan_courses(
             detail="Training plan not found"
         )
 
-    return db.query(PlanCourse).filter(
-        PlanCourse.plan_id == plan_id
+    ensure_employee_access(context, db, plan.employee_id)
+    return db.query(PlanCourse).join(
+        Course,
+        PlanCourse.course_id == Course.id,
+    ).filter(
+        PlanCourse.plan_id == plan_id,
+        Course.company_id == company_id,
     ).order_by(
         PlanCourse.sequence_order
     ).all()
@@ -117,14 +130,19 @@ def get_plan_courses(
 def get_plan_course(
     plan_course_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
     item = db.query(PlanCourse).join(
         TrainingPlan,
         PlanCourse.plan_id == TrainingPlan.plan_id
+    ).join(
+        Course,
+        PlanCourse.course_id == Course.id,
     ).filter(
         PlanCourse.plan_course_id == plan_course_id,
-        TrainingPlan.company_id == company_id
+        TrainingPlan.company_id == company_id,
+        Course.company_id == company_id,
     ).first()
 
     if item is None:
@@ -133,6 +151,7 @@ def get_plan_course(
             detail="Plan course not found"
         )
 
+    ensure_employee_access(context, db, item.training_plan.employee_id)
     return item
 
 
@@ -142,14 +161,19 @@ def update_plan_course(
     plan_course_id: int,
     company_id: int,
     course_data: PlanCourseUpdate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
     item = db.query(PlanCourse).join(
         TrainingPlan,
         PlanCourse.plan_id == TrainingPlan.plan_id
+    ).join(
+        Course,
+        PlanCourse.course_id == Course.id,
     ).filter(
         PlanCourse.plan_course_id == plan_course_id,
-        TrainingPlan.company_id == company_id
+        TrainingPlan.company_id == company_id,
+        Course.company_id == company_id,
     ).first()
 
     if item is None:
@@ -159,6 +183,7 @@ def update_plan_course(
         )
 
     plan = item.training_plan
+    ensure_employee_access(context, db, plan.employee_id)
 
     if plan.plan_status != "Draft" or plan.approval_status != "Pending":
         raise HTTPException(
@@ -195,14 +220,19 @@ def update_plan_course(
 def remove_plan_course(
     plan_course_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
     item = db.query(PlanCourse).join(
         TrainingPlan,
         PlanCourse.plan_id == TrainingPlan.plan_id
+    ).join(
+        Course,
+        PlanCourse.course_id == Course.id,
     ).filter(
         PlanCourse.plan_course_id == plan_course_id,
-        TrainingPlan.company_id == company_id
+        TrainingPlan.company_id == company_id,
+        Course.company_id == company_id,
     ).first()
 
     if item is None:
@@ -211,6 +241,7 @@ def remove_plan_course(
             detail="Plan course not found"
         )
 
+    ensure_employee_access(context, db, item.training_plan.employee_id)
     if (
         item.training_plan.plan_status != "Draft"
         or item.training_plan.approval_status != "Pending"

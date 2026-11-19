@@ -1,8 +1,27 @@
 ﻿"use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { authenticatedFetch } from "../../lib/api";
+import { useAuth } from "../../components/auth-provider";
 
-const COMPANY_ID = 14;
+const ASSESSMENT_SOURCES = [
+  "Manager Assessment",
+  "Technical Test",
+  "Practical Demonstration",
+  "Self-Assessment",
+  "Project or Work Sample",
+  "Certificate",
+  "Peer Assessment",
+  "External Assessment",
+];
+
+const PROFICIENCY_LEVELS = [
+  { value: 1, label: "Beginner", description: "Basic awareness; needs guidance." },
+  { value: 2, label: "Basic", description: "Can perform simple tasks with support." },
+  { value: 3, label: "Intermediate", description: "Works independently on routine tasks." },
+  { value: 4, label: "Advanced", description: "Handles complex tasks and supports others." },
+  { value: 5, label: "Expert", description: "Demonstrates mastery and can lead or mentor." },
+];
 
 type Employee = {
   id: number;
@@ -27,38 +46,51 @@ type Assessment = {
   assessment_source: string;
   assessment_score: number | null;
   evidence_quality: string;
+  evidence_title: string | null;
+  evidence_description: string | null;
   assessment_date: string;
   expiry_date: string | null;
   assessor_comments: string | null;
   evidence_status: string;
 };
 
+const today = () => {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+};
+
+const emptyForm = () => ({
+  employee_id: "",
+  employee_search: "",
+  skill_id: "",
+  proficiency_level: "1",
+  assessment_source: "Manager Assessment",
+  assessment_score: "",
+  evidence_quality: "Medium",
+  evidence_title: "",
+  evidence_description: "",
+  assessment_date: today(),
+  expiry_date: "",
+  assessor_comments: "",
+});
+
 export default function AssessmentsPage() {
+  const { activeMembership } = useAuth();
+  const canCreate = activeMembership?.role === "Training Manager" ||
+    activeMembership?.role === "Manager" ||
+    activeMembership?.role === "Employee";
+  const canReview = activeMembership?.role === "Training Manager" ||
+    activeMembership?.role === "Director" ||
+    activeMembership?.role === "Manager";
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [assessments, setAssessments] = useState<Assessment[]>([]);
+  const [form, setForm] = useState(emptyForm);
   const [selectedStatus, setSelectedStatus] = useState("All");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-
-  const getToday = () => {
-    const date = new Date();
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  };
-
-  const [form, setForm] = useState({
-    employee_id: "",
-    skill_id: "",
-    proficiency_level: "1",
-    assessment_source: "Manager Assessment",
-    assessment_score: "",
-    evidence_quality: "Medium",
-    assessment_date: getToday(),
-    expiry_date: "",
-    assessor_comments: "",
-  });
 
   async function loadData() {
     setLoading(true);
@@ -67,38 +99,61 @@ export default function AssessmentsPage() {
     try {
       const [employeeResponse, skillResponse, assessmentResponse] =
         await Promise.all([
-          fetch(`/api/employees?company_id=${COMPANY_ID}`, {
-            cache: "no-store",
-          }),
-          fetch("/api/skills", { cache: "no-store" }),
-          fetch(`/api/skill-assessments?company_id=${COMPANY_ID}`, {
-            cache: "no-store",
-          }),
+          authenticatedFetch("/api/employees", { cache: "no-store" }),
+          authenticatedFetch("/api/skills", { cache: "no-store" }),
+          authenticatedFetch("/api/skill-assessments", { cache: "no-store" }),
         ]);
 
       if (!employeeResponse.ok || !skillResponse.ok || !assessmentResponse.ok) {
         throw new Error("One or more API requests failed. Check the backend.");
       }
 
-      const employeeData = await employeeResponse.json();
-      const skillData = await skillResponse.json();
-      const assessmentData = await assessmentResponse.json();
+      const [employeeData, skillData, assessmentData] = await Promise.all([
+        employeeResponse.json(),
+        skillResponse.json(),
+        assessmentResponse.json(),
+      ]);
 
       setEmployees(Array.isArray(employeeData) ? employeeData : []);
       setSkills(Array.isArray(skillData) ? skillData : []);
       setAssessments(Array.isArray(assessmentData) ? assessmentData : []);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Unable to load assessment data."
-      );
+      setError(err instanceof Error ? err.message : "Unable to load assessment data.");
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    loadData();
+    const timer = window.setTimeout(() => void loadData(), 0);
+    return () => window.clearTimeout(timer);
   }, []);
+
+  const selectedEmployee = employees.find(
+    (employee) => String(employee.id) === form.employee_id
+  );
+
+  const selectedSkill = skills.find(
+    (skill) => String(skill.skill_id) === form.skill_id
+  );
+
+  const filteredEmployees = useMemo(() => {
+    const term = form.employee_search.trim().toLowerCase();
+    if (!term) return employees.slice(0, 30);
+
+    return employees.filter((employee) =>
+      [
+        employee.full_name,
+        employee.employee_id,
+        employee.job_title ?? "",
+        employee.department ?? "",
+      ].some((value) => value.toLowerCase().includes(term))
+    ).slice(0, 50);
+  }, [employees, form.employee_search]);
+
+  const selectedLevel = PROFICIENCY_LEVELS.find(
+    (level) => String(level.value) === form.proficiency_level
+  );
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -110,10 +165,12 @@ export default function AssessmentsPage() {
       return;
     }
 
-    if (
-      form.expiry_date &&
-      form.expiry_date < form.assessment_date
-    ) {
+    if (form.evidence_title.trim().length < 2) {
+      setError("Please enter an evidence title.");
+      return;
+    }
+
+    if (form.expiry_date && form.expiry_date < form.assessment_date) {
       setError("Expiry date cannot be before the assessment date.");
       return;
     }
@@ -122,12 +179,11 @@ export default function AssessmentsPage() {
       employee_id: Number(form.employee_id),
       skill_id: Number(form.skill_id),
       proficiency_level: Number(form.proficiency_level),
-      assessment_source: form.assessment_source.trim(),
-      assessment_score:
-        form.assessment_score === ""
-          ? null
-          : Number(form.assessment_score),
+      assessment_source: form.assessment_source,
+      assessment_score: form.assessment_score === "" ? null : Number(form.assessment_score),
       evidence_quality: form.evidence_quality,
+      evidence_title: form.evidence_title.trim(),
+      evidence_description: form.evidence_description.trim() || null,
       assessment_date: form.assessment_date,
       expiry_date: form.expiry_date || null,
       assessor_comments: form.assessor_comments.trim() || null,
@@ -136,8 +192,8 @@ export default function AssessmentsPage() {
     setSaving(true);
 
     try {
-      const response = await fetch(
-        `/api/skill-assessments?company_id=${COMPANY_ID}`,
+      const response = await authenticatedFetch(
+        "/api/skill-assessments",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -146,29 +202,15 @@ export default function AssessmentsPage() {
       );
 
       if (!response.ok) {
-        const responseText = await response.text();
-        throw new Error(responseText || "Assessment creation failed.");
+        const body = await response.text();
+        throw new Error(body || "Assessment creation failed.");
       }
 
-      setSuccess("Assessment created successfully. It is pending review.");
-
-      setForm({
-        employee_id: "",
-        skill_id: "",
-        proficiency_level: "1",
-        assessment_source: "Manager Assessment",
-        assessment_score: "",
-        evidence_quality: "Medium",
-        assessment_date: getToday(),
-        expiry_date: "",
-        assessor_comments: "",
-      });
-
+      setSuccess("Assessment created successfully and submitted for review.");
+      setForm(emptyForm());
       await loadData();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Unable to create assessment."
-      );
+      setError(err instanceof Error ? err.message : "Unable to create assessment.");
     } finally {
       setSaving(false);
     }
@@ -181,15 +223,13 @@ export default function AssessmentsPage() {
     setError("");
     setSuccess("");
 
-    const confirmed = window.confirm(
-      `Are you sure you want to ${status.toLowerCase()} this assessment?`
-    );
-
-    if (!confirmed) return;
+    if (!window.confirm(`Are you sure you want to ${status.toLowerCase()} this assessment?`)) {
+      return;
+    }
 
     try {
-      const response = await fetch(
-        `/api/skill-assessments/${assessmentId}/review?company_id=${COMPANY_ID}`,
+      const response = await authenticatedFetch(
+        `/api/skill-assessments/${assessmentId}/review`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -198,58 +238,35 @@ export default function AssessmentsPage() {
       );
 
       if (!response.ok) {
-        const responseText = await response.text();
-        throw new Error(responseText || "Assessment review failed.");
+        throw new Error(await response.text() || "Assessment review failed.");
       }
 
       setSuccess(`Assessment ${status.toLowerCase()} successfully.`);
       await loadData();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Unable to review assessment."
-      );
+      setError(err instanceof Error ? err.message : "Unable to review assessment.");
     }
   }
 
-  const pendingCount = assessments.filter(
-    (item) => item.evidence_status === "Pending Review"
-  ).length;
+  const pendingCount = assessments.filter((item) => item.evidence_status === "Pending Review").length;
+  const approvedCount = assessments.filter((item) => item.evidence_status === "Approved").length;
+  const rejectedCount = assessments.filter((item) => item.evidence_status === "Rejected").length;
 
-  const approvedCount = assessments.filter(
-    (item) => item.evidence_status === "Approved"
-  ).length;
-
-  const rejectedCount = assessments.filter(
-    (item) => item.evidence_status === "Rejected"
-  ).length;
-
-  const filteredAssessments =
-    selectedStatus === "All"
-      ? assessments
-      : assessments.filter(
-          (item) => item.evidence_status === selectedStatus
-        );
+  const filteredAssessments = selectedStatus === "All"
+    ? assessments
+    : assessments.filter((item) => item.evidence_status === selectedStatus);
 
   function employeeName(employeeId: number) {
     const employee = employees.find((item) => item.id === employeeId);
-    return employee
-      ? `${employee.full_name} (${employee.employee_id})`
-      : `Employee #${employeeId}`;
+    return employee ? `${employee.full_name} (${employee.employee_id})` : `Employee #${employeeId}`;
   }
 
   function skillName(skillId: number) {
-    return (
-      skills.find((item) => item.skill_id === skillId)?.skill_name ??
-      `Skill #${skillId}`
-    );
+    return skills.find((item) => item.skill_id === skillId)?.skill_name ?? `Skill #${skillId}`;
   }
 
   if (loading) {
-    return (
-      <main className="assessment-page">
-        <p>Loading assessment management...</p>
-      </main>
-    );
+    return <main className="assessment-page"><p>Loading assessment management...</p></main>;
   }
 
   return (
@@ -258,81 +275,87 @@ export default function AssessmentsPage() {
         <div>
           <p className="assessment-eyebrow">EMPLOYEE DEVELOPMENT</p>
           <h1>Skill Assessment Management</h1>
-          <p>
-            Record employee skill assessments and review their supporting
-            evidence.
-          </p>
+          <p>Record employee skills, document supporting evidence, and manage review status.</p>
         </div>
-        <button className="assessment-refresh" onClick={loadData}>
-          Refresh data
-        </button>
+        <button type="button" className="assessment-refresh" onClick={loadData}>Refresh data</button>
       </header>
 
       {error && <div className="assessment-alert error">{error}</div>}
       {success && <div className="assessment-alert success">{success}</div>}
 
       <section className="assessment-stats">
-        <div className="assessment-stat">
-          <span>Total assessments</span>
-          <strong>{assessments.length}</strong>
-        </div>
-        <div className="assessment-stat">
-          <span>Pending review</span>
-          <strong>{pendingCount}</strong>
-        </div>
-        <div className="assessment-stat">
-          <span>Approved</span>
-          <strong>{approvedCount}</strong>
-        </div>
-        <div className="assessment-stat">
-          <span>Rejected</span>
-          <strong>{rejectedCount}</strong>
-        </div>
+        <div className="assessment-stat"><span>Total assessments</span><strong>{assessments.length}</strong></div>
+        <div className="assessment-stat"><span>Pending review</span><strong>{pendingCount}</strong></div>
+        <div className="assessment-stat"><span>Approved</span><strong>{approvedCount}</strong></div>
+        <div className="assessment-stat"><span>Rejected</span><strong>{rejectedCount}</strong></div>
       </section>
 
-      <section className="assessment-panel">
+      {canCreate && <section className="assessment-panel">
         <div className="assessment-section-heading">
           <div>
             <h2>Create a skill assessment</h2>
-            <p>
-              New assessments are automatically submitted as Pending Review.
-            </p>
+            <p>Complete the assessment and its supporting evidence. New submissions require review.</p>
           </div>
         </div>
 
         {employees.length === 0 || skills.length === 0 ? (
-          <p className="assessment-empty">
-            You need at least one employee and one skill before creating an
-            assessment.
-          </p>
+          <p className="assessment-empty">You need at least one employee and one skill before creating an assessment.</p>
         ) : (
           <form className="assessment-form" onSubmit={handleSubmit}>
-            <label>
-              Employee
+            <div className="assessment-full-width">
+              <h3>1. Employee information</h3>
+            </div>
+
+            <label className="assessment-full-width">
+              Search employees
+              <input
+                type="search"
+                value={form.employee_search}
+                placeholder="Search by name, employee ID, job title, or department"
+                onChange={(event) => setForm({
+                  ...form,
+                  employee_search: event.target.value,
+                  employee_id: "",
+                })}
+              />
+            </label>
+
+            <label className="assessment-full-width">
+              Select employee
               <select
                 required
                 value={form.employee_id}
-                onChange={(event) =>
-                  setForm({ ...form, employee_id: event.target.value })
-                }
+                onChange={(event) => setForm({ ...form, employee_id: event.target.value })}
               >
                 <option value="">Select an employee</option>
-                {employees.map((employee) => (
+                {filteredEmployees.map((employee) => (
                   <option key={employee.id} value={employee.id}>
                     {employee.full_name} — {employee.employee_id}
                   </option>
                 ))}
               </select>
+              <small>{filteredEmployees.length} matching employees shown (maximum 50).</small>
             </label>
+
+            {selectedEmployee && (
+              <div className="assessment-full-width assessment-note">
+                <strong>{selectedEmployee.full_name}</strong>
+                <p>Employee ID: {selectedEmployee.employee_id}</p>
+                <p>Job title: {selectedEmployee.job_title || "Not available"}</p>
+                <p>Department: {selectedEmployee.department || "Not available"}</p>
+              </div>
+            )}
+
+            <div className="assessment-full-width">
+              <h3>2. Skill assessment</h3>
+            </div>
 
             <label>
               Skill
               <select
                 required
                 value={form.skill_id}
-                onChange={(event) =>
-                  setForm({ ...form, skill_id: event.target.value })
-                }
+                onChange={(event) => setForm({ ...form, skill_id: event.target.value })}
               >
                 <option value="">Select a skill</option>
                 {skills.map((skill) => (
@@ -347,29 +370,45 @@ export default function AssessmentsPage() {
               Proficiency level
               <select
                 value={form.proficiency_level}
-                onChange={(event) =>
-                  setForm({ ...form, proficiency_level: event.target.value })
-                }
+                onChange={(event) => setForm({ ...form, proficiency_level: event.target.value })}
               >
-                {[1, 2, 3, 4, 5].map((level) => (
-                  <option key={level} value={level}>
-                    {level} / 5
+                {PROFICIENCY_LEVELS.map((level) => (
+                  <option key={level.value} value={level.value}>
+                    {level.value} — {level.label}
                   </option>
                 ))}
               </select>
             </label>
 
+            {selectedSkill && (
+              <div className="assessment-full-width assessment-note">
+                <strong>{selectedSkill.skill_name}</strong>
+                <p>Category: {selectedSkill.category || "Not specified"}</p>
+              </div>
+            )}
+
+            {selectedLevel && (
+              <div className="assessment-full-width assessment-note">
+                <strong>Level {selectedLevel.value}: {selectedLevel.label}</strong>
+                <p>{selectedLevel.description}</p>
+              </div>
+            )}
+
+            <div className="assessment-full-width">
+              <h3>3. Assessment method and results</h3>
+            </div>
+
             <label>
-              Assessment source
-              <input
+              Assessment method
+              <select
                 required
-                maxLength={50}
                 value={form.assessment_source}
-                onChange={(event) =>
-                  setForm({ ...form, assessment_source: event.target.value })
-                }
-                placeholder="e.g. Manager Assessment"
-              />
+                onChange={(event) => setForm({ ...form, assessment_source: event.target.value })}
+              >
+                {ASSESSMENT_SOURCES.map((source) => (
+                  <option key={source} value={source}>{source}</option>
+                ))}
+              </select>
             </label>
 
             <label>
@@ -380,9 +419,7 @@ export default function AssessmentsPage() {
                 max="100"
                 step="0.01"
                 value={form.assessment_score}
-                onChange={(event) =>
-                  setForm({ ...form, assessment_score: event.target.value })
-                }
+                onChange={(event) => setForm({ ...form, assessment_score: event.target.value })}
                 placeholder="0–100"
               />
             </label>
@@ -391,9 +428,7 @@ export default function AssessmentsPage() {
               Evidence quality
               <select
                 value={form.evidence_quality}
-                onChange={(event) =>
-                  setForm({ ...form, evidence_quality: event.target.value })
-                }
+                onChange={(event) => setForm({ ...form, evidence_quality: event.target.value })}
               >
                 <option value="Low">Low</option>
                 <option value="Medium">Medium</option>
@@ -407,9 +442,7 @@ export default function AssessmentsPage() {
                 type="date"
                 required
                 value={form.assessment_date}
-                onChange={(event) =>
-                  setForm({ ...form, assessment_date: event.target.value })
-                }
+                onChange={(event) => setForm({ ...form, assessment_date: event.target.value })}
               />
             </label>
 
@@ -419,9 +452,34 @@ export default function AssessmentsPage() {
                 type="date"
                 min={form.assessment_date}
                 value={form.expiry_date}
-                onChange={(event) =>
-                  setForm({ ...form, expiry_date: event.target.value })
-                }
+                onChange={(event) => setForm({ ...form, expiry_date: event.target.value })}
+              />
+            </label>
+
+            <div className="assessment-full-width">
+              <h3>4. Supporting evidence</h3>
+            </div>
+
+            <label className="assessment-full-width">
+              Evidence title
+              <input
+                required
+                minLength={2}
+                maxLength={200}
+                value={form.evidence_title}
+                onChange={(event) => setForm({ ...form, evidence_title: event.target.value })}
+                placeholder="e.g. Python Technical Assessment"
+              />
+            </label>
+
+            <label className="assessment-full-width">
+              Evidence description
+              <textarea
+                rows={4}
+                maxLength={5000}
+                value={form.evidence_description}
+                onChange={(event) => setForm({ ...form, evidence_description: event.target.value })}
+                placeholder="Describe the evidence, what was assessed, and what it demonstrates."
               />
             </label>
 
@@ -429,31 +487,26 @@ export default function AssessmentsPage() {
               Assessor comments (optional)
               <textarea
                 rows={3}
+                maxLength={5000}
                 value={form.assessor_comments}
-                onChange={(event) =>
-                  setForm({ ...form, assessor_comments: event.target.value })
-                }
-                placeholder="Add assessment notes or evidence details..."
+                onChange={(event) => setForm({ ...form, assessor_comments: event.target.value })}
+                placeholder="Add observations or additional notes."
               />
             </label>
 
             <div className="assessment-full-width">
-              <button
-                className="assessment-submit"
-                type="submit"
-                disabled={saving}
-              >
-                {saving ? "Creating..." : "Create assessment"}
+              <button className="assessment-submit" type="submit" disabled={saving}>
+                {saving ? "Submitting..." : "Submit assessment for review"}
               </button>
             </div>
           </form>
         )}
 
         <p className="assessment-note">
-          This form records evidence details and comments. It does not upload
-          documents or files.
+          Evidence is recorded as text. This version does not upload documents or files.
+          An assessment does not become verified proficiency until it is approved.
         </p>
-      </section>
+      </section>}
 
       <section className="assessment-panel">
         <div className="assessment-section-heading assessment-record-heading">
@@ -461,7 +514,6 @@ export default function AssessmentsPage() {
             <h2>Assessment records</h2>
             <p>Review assessment history and submitted evidence.</p>
           </div>
-
           <select
             className="assessment-filter"
             value={selectedStatus}
@@ -476,9 +528,7 @@ export default function AssessmentsPage() {
         </div>
 
         {filteredAssessments.length === 0 ? (
-          <p className="assessment-empty">
-            No assessment records found for this filter.
-          </p>
+          <p className="assessment-empty">No assessment records found for this filter.</p>
         ) : (
           <div className="assessment-table-wrapper">
             <table className="assessment-table">
@@ -487,7 +537,7 @@ export default function AssessmentsPage() {
                   <th>Employee</th>
                   <th>Skill</th>
                   <th>Level</th>
-                  <th>Source</th>
+                  <th>Method</th>
                   <th>Evidence</th>
                   <th>Date</th>
                   <th>Status</th>
@@ -501,39 +551,31 @@ export default function AssessmentsPage() {
                     <td>{skillName(assessment.skill_id)}</td>
                     <td>{assessment.proficiency_level}/5</td>
                     <td>{assessment.assessment_source}</td>
-                    <td>{assessment.evidence_quality}</td>
+                    <td>
+                      <strong>{assessment.evidence_title || "Legacy record"}</strong>
+                      {assessment.evidence_description && <p>{assessment.evidence_description}</p>}
+                      <small>Quality: {assessment.evidence_quality}</small>
+                    </td>
                     <td>{assessment.assessment_date}</td>
                     <td>
-                      <span
-                        className={`assessment-status ${assessment.evidence_status
-                          .toLowerCase()
-                          .replaceAll(" ", "-")}`}
-                      >
+                      <span className={`assessment-status ${assessment.evidence_status.toLowerCase().replaceAll(" ", "-")}`}>
                         {assessment.evidence_status}
                       </span>
                     </td>
                     <td>
-                      {assessment.evidence_status === "Pending Review" ? (
+                      {canReview && assessment.evidence_status === "Pending Review" ? (
                         <div className="assessment-actions">
                           <button
+                            type="button"
                             className="assessment-approve"
-                            onClick={() =>
-                              reviewAssessment(
-                                assessment.assessment_id,
-                                "Approved"
-                              )
-                            }
+                            onClick={() => reviewAssessment(assessment.assessment_id, "Approved")}
                           >
                             Approve
                           </button>
                           <button
+                            type="button"
                             className="assessment-reject"
-                            onClick={() =>
-                              reviewAssessment(
-                                assessment.assessment_id,
-                                "Rejected"
-                              )
-                            }
+                            onClick={() => reviewAssessment(assessment.assessment_id, "Rejected")}
                           >
                             Reject
                           </button>

@@ -1,4 +1,5 @@
 ﻿from datetime import date, datetime
+import math
 from typing import Any
 import re
 
@@ -213,21 +214,32 @@ def validate_employee_rows(
         # Email validation. Preserve the original value.
         original_email = employee.get("email")
 
-        if original_email:
-            normalized_email = original_email.lower()
-            employee["email"] = normalized_email
-            employee["email_original"] = original_email
-
-            if not EMAIL_PATTERN.fullmatch(normalized_email):
+        if original_email is not None and original_email != "":
+            if not isinstance(original_email, str):
                 row_errors.append({
                     "row_number": row_number,
                     "field": "email",
                     "type": "invalid_email",
                     "message": (
-                        f"Invalid email address: {original_email}"
+                        "Email address must be text."
                     ),
                     "raw_value": original_email,
                 })
+            else:
+                normalized_email = original_email.lower()
+                employee["email"] = normalized_email
+                employee["email_original"] = original_email
+
+                if not EMAIL_PATTERN.fullmatch(normalized_email):
+                    row_errors.append({
+                        "row_number": row_number,
+                        "field": "email",
+                        "type": "invalid_email",
+                        "message": (
+                            f"Invalid email address: {original_email}"
+                        ),
+                        "raw_value": original_email,
+                    })
 
         # Hire date validation.
         hire_date = employee.get("hire_date")
@@ -256,7 +268,7 @@ def validate_employee_rows(
             try:
                 number = float(value)
 
-                if number < 0:
+                if not math.isfinite(number) or number < 0:
                     raise ValueError
 
                 employee[field] = number
@@ -285,7 +297,7 @@ def validate_employee_rows(
         # Collect valid-format emails for duplicate detection.
         email = employee.get("email")
 
-        if email and EMAIL_PATTERN.fullmatch(email):
+        if isinstance(email, str) and email and EMAIL_PATTERN.fullmatch(email):
             email_rows.setdefault(email, []).append(row_number)
 
         employees.append({
@@ -340,6 +352,7 @@ def validate_employee_rows(
 
     return {
         "valid_rows": valid_rows,
+        "rows": employees,
         "errors": errors,
         "warnings": warnings,
         "mapping": field_mapping,

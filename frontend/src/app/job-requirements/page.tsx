@@ -1,8 +1,8 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-
-const COMPANY_ID = 14;
+import { authenticatedFetch } from "../../lib/api";
+import { useAuth } from "../../components/auth-provider";
 
 type Skill = {
   skill_id: number;
@@ -22,21 +22,17 @@ type Requirement = {
   approved_by: number | null;
 };
 
-type Employee = {
-  id: number;
-  full_name: string;
-  employee_id: string;
-  job_title: string;
-  is_active: boolean;
-};
-
 type Position = {
   job_title: string;
   employee_count: number;
 };
 
+type TNAData = {
+  position_analysis: Position[];
+};
+
 async function apiRequest<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
+  const response = await authenticatedFetch(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -45,7 +41,7 @@ async function apiRequest<T>(url: string, options?: RequestInit): Promise<T> {
   });
 
   const text = await response.text();
-  let result: any = null;
+  let result: unknown = null;
 
   try {
     result = text ? JSON.parse(text) : null;
@@ -54,21 +50,31 @@ async function apiRequest<T>(url: string, options?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    const detail =
-      typeof result === "object" && result !== null
-        ? result.detail || result.message
-        : result;
-
-    throw new Error(detail || `Request failed (${response.status}).`);
+    const detail = typeof result === "object" && result !== null
+      ? "detail" in result
+        ? result.detail
+        : "message" in result
+          ? result.message
+          : undefined
+      : result;
+    throw new Error(
+      typeof detail === "string"
+        ? detail
+        : detail === undefined
+          ? `Request failed (${response.status}).`
+          : JSON.stringify(detail)
+    );
   }
 
   return result as T;
 }
 
 export default function JobRequirementsPage() {
+  const { activeMembership } = useAuth();
+  const canEdit = activeMembership?.role === "Training Manager";
+  const canApprove = canEdit || activeMembership?.role === "Director";
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
 
   const [loading, setLoading] = useState(true);
@@ -79,7 +85,6 @@ export default function JobRequirementsPage() {
   const [jobFilter, setJobFilter] = useState("All positions");
   const [statusFilter, setStatusFilter] = useState("All statuses");
   const [search, setSearch] = useState("");
-  const [approverId, setApproverId] = useState("");
 
   const [jobTitle, setJobTitle] = useState("");
   const [skillId, setSkillId] = useState("");
@@ -92,22 +97,16 @@ export default function JobRequirementsPage() {
     setError("");
 
     try {
-      const [requirementData, skillData, employeeData, tnaData] =
+      const [requirementData, skillData, tnaData] =
         await Promise.all([
-          apiRequest<Requirement[]>(
-            `/api/job-skills?company_id=${COMPANY_ID}`
-          ),
+          apiRequest<Requirement[]>("/api/job-skills"),
           apiRequest<Skill[]>("/api/skills"),
-          apiRequest<Employee[]>(
-            `/api/employees?company_id=${COMPANY_ID}`
-          ),
-          apiRequest<any>(`/api/tna?company_id=${COMPANY_ID}`),
+          apiRequest<TNAData>("/api/tna"),
         ]);
 
       setRequirements(requirementData);
       setSkills(skillData);
-      setEmployees(employeeData.filter((employee) => employee.is_active));
-      setPositions(tnaData.position_analysis || []);
+      setPositions(tnaData.position_analysis);
 
       if (!jobTitle && tnaData.position_analysis?.length) {
         setJobTitle(tnaData.position_analysis[0].job_title);
@@ -126,7 +125,8 @@ export default function JobRequirementsPage() {
   }, [jobTitle, skillId]);
 
   useEffect(() => {
-    loadData();
+    const timer = window.setTimeout(() => void loadData(), 0);
+    return () => window.clearTimeout(timer);
   }, [loadData]);
 
   const skillMap = useMemo(
@@ -212,7 +212,7 @@ export default function JobRequirementsPage() {
 
       if (editingId !== null) {
         await apiRequest<Requirement>(
-          `/api/job-skills/${editingId}?company_id=${COMPANY_ID}`,
+          `/api/job-skills/${editingId}`,
           {
             method: "PUT",
             body: JSON.stringify({
@@ -227,7 +227,7 @@ export default function JobRequirementsPage() {
         );
       } else {
         await apiRequest<Requirement>(
-          `/api/job-skills?company_id=${COMPANY_ID}`,
+          "/api/job-skills",
           {
             method: "POST",
             body: JSON.stringify({
@@ -260,14 +260,9 @@ export default function JobRequirementsPage() {
     setError("");
     setMessage("");
 
-    if (!approverId) {
-      setError("Select an active employee to record this approval decision.");
-      return;
-    }
-
     try {
       await apiRequest<Requirement>(
-        `/api/job-skills/${requirement.id}/approval?company_id=${COMPANY_ID}&approved_by=${approverId}`,
+        `/api/job-skills/${requirement.id}/approval`,
         {
           method: "PUT",
           body: JSON.stringify({ approval_status: approvalStatus }),
@@ -338,7 +333,7 @@ export default function JobRequirementsPage() {
         </div>
       </section>
 
-      <section className="job-skills-panel">
+      {canEdit && <section className="job-skills-panel">
         <div className="job-skills-section-heading">
           <div>
             <h2>{editingId !== null ? "Edit requirement" : "Add a job requirement"}</h2>
@@ -458,41 +453,19 @@ export default function JobRequirementsPage() {
             job-title data before creating requirements.
           </div>
         )}
-      </section>
+      </section>}
 
       <section className="job-skills-panel">
         <div className="job-skills-section-heading">
           <div>
             <h2>Requirements and approval</h2>
             <p>
-              Review the requirements configured for company {COMPANY_ID}.
+              Review the requirements configured for your active company.
             </p>
           </div>
           <span className="job-skills-status pending">
             {pendingCount} pending
           </span>
-        </div>
-
-        <div className="job-skills-approver">
-          <label>
-            Approving employee
-            <select
-              value={approverId}
-              onChange={(event) => setApproverId(event.target.value)}
-            >
-              <option value="">Select an active employee</option>
-              {employees.map((employee) => (
-                <option value={employee.id} key={employee.id}>
-                  {employee.full_name} — {employee.job_title} (DB ID: {employee.id})
-                </option>
-              ))}
-            </select>
-          </label>
-          <p>
-            The backend records this employee's internal database ID.
-            Currently, it validates active status and company membership;
-            manager-role authorization is not yet enforced by the API.
-          </p>
         </div>
 
         <div className="job-skills-filters">
@@ -578,15 +551,15 @@ export default function JobRequirementsPage() {
                       </td>
                       <td>
                         <div className="job-skills-actions">
-                          <button
+                          {canEdit && <button
                             className="job-skills-edit"
                             type="button"
                             onClick={() => startEditing(requirement)}
                           >
                             Edit
-                          </button>
+                          </button>}
 
-                          {requirement.approval_status === "Pending" ? (
+                          {canApprove && requirement.approval_status === "Pending" ? (
                             <>
                               <button
                                 className="job-skills-approve"
@@ -594,12 +567,7 @@ export default function JobRequirementsPage() {
                                 onClick={() =>
                                   updateApproval(requirement, "Approved")
                                 }
-                                disabled={!approverId}
-                                title={
-                                  !approverId
-                                    ? "Select an approving employee first"
-                                    : "Approve requirement"
-                                }
+                                title="Approve requirement"
                               >
                                 Approve
                               </button>
@@ -609,12 +577,7 @@ export default function JobRequirementsPage() {
                                 onClick={() =>
                                   updateApproval(requirement, "Rejected")
                                 }
-                                disabled={!approverId}
-                                title={
-                                  !approverId
-                                    ? "Select an approving employee first"
-                                    : "Reject requirement"
-                                }
+                                title="Reject requirement"
                               >
                                 Reject
                               </button>

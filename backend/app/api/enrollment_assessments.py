@@ -3,10 +3,19 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import (
+    AuthContext,
+    allowed_employee_ids,
+    ensure_employee_access,
+    get_auth_context,
+    get_db,
+)
 
 from backend.app.db.enrollment import Enrollment
 from backend.app.db.enrollment_assessment import EnrollmentAssessment
+from backend.app.db.employee import Employee
+from backend.app.db.course_session import CourseSession
+from backend.app.db.course import Course
 
 from backend.app.schemas.enrollment_assessment import (
     EnrollmentAssessmentCreate,
@@ -21,6 +30,29 @@ router = APIRouter(
 )
 
 
+def _assessment_query(db: Session, company_id: int):
+    return db.query(EnrollmentAssessment).join(
+        Enrollment,
+        EnrollmentAssessment.enrollment_id == Enrollment.enrollment_id,
+    ).join(
+        Employee,
+        Enrollment.employee_id == Employee.id,
+    ).join(
+        CourseSession,
+        Enrollment.session_id == CourseSession.session_id,
+    ).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).filter(
+        EnrollmentAssessment.company_id == company_id,
+        Enrollment.company_id == company_id,
+        Employee.company_id == company_id,
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
+        Enrollment.course_id == Course.id,
+    )
+
+
 # 1. CREATE ASSESSMENT ATTEMPT
 @router.post(
     "/",
@@ -30,11 +62,25 @@ router = APIRouter(
 def create_enrollment_assessment(
     company_id: int,
     assessment_data: EnrollmentAssessmentCreate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    enrollment = db.query(Enrollment).filter(
+    enrollment = db.query(Enrollment).join(
+        Employee,
+        Enrollment.employee_id == Employee.id,
+    ).join(
+        CourseSession,
+        Enrollment.session_id == CourseSession.session_id,
+    ).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).filter(
         Enrollment.enrollment_id == assessment_data.enrollment_id,
-        Enrollment.company_id == company_id
+        Enrollment.company_id == company_id,
+        Employee.company_id == company_id,
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
+        Enrollment.course_id == Course.id,
     ).first()
 
     if enrollment is None:
@@ -43,6 +89,7 @@ def create_enrollment_assessment(
             detail="Enrollment not found"
         )
 
+    ensure_employee_access(context, db, enrollment.employee_id)
     if enrollment.status not in ["In Progress", "Completed"]:
         raise HTTPException(
             status_code=400,
@@ -81,11 +128,13 @@ def create_enrollment_assessment(
 def get_enrollment_assessments(
     company_id: int,
     enrollment_id: int | None = None,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    query = db.query(EnrollmentAssessment).filter(
-        EnrollmentAssessment.company_id == company_id
-    )
+    query = _assessment_query(db, company_id)
+    employee_ids = allowed_employee_ids(context, db)
+    if employee_ids is not None:
+        query = query.filter(Enrollment.employee_id.in_(employee_ids))
 
     if enrollment_id is not None:
         query = query.filter(
@@ -105,11 +154,11 @@ def get_enrollment_assessments(
 def get_enrollment_assessment(
     assessment_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    assessment = db.query(EnrollmentAssessment).filter(
+    assessment = _assessment_query(db, company_id).filter(
         EnrollmentAssessment.assessment_id == assessment_id,
-        EnrollmentAssessment.company_id == company_id
     ).first()
 
     if assessment is None:
@@ -118,6 +167,7 @@ def get_enrollment_assessment(
             detail="Assessment not found"
         )
 
+    ensure_employee_access(context, db, assessment.enrollment.employee_id)
     return assessment
 
 
@@ -130,11 +180,11 @@ def update_enrollment_assessment(
     assessment_id: int,
     company_id: int,
     assessment_data: EnrollmentAssessmentUpdate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    assessment = db.query(EnrollmentAssessment).filter(
+    assessment = _assessment_query(db, company_id).filter(
         EnrollmentAssessment.assessment_id == assessment_id,
-        EnrollmentAssessment.company_id == company_id
     ).first()
 
     if assessment is None:
@@ -143,6 +193,7 @@ def update_enrollment_assessment(
             detail="Assessment not found"
         )
 
+    ensure_employee_access(context, db, assessment.enrollment.employee_id)
     update_data = assessment_data.model_dump(exclude_unset=True)
 
     for field, value in update_data.items():
@@ -159,11 +210,11 @@ def update_enrollment_assessment(
 def delete_enrollment_assessment(
     assessment_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    assessment = db.query(EnrollmentAssessment).filter(
+    assessment = _assessment_query(db, company_id).filter(
         EnrollmentAssessment.assessment_id == assessment_id,
-        EnrollmentAssessment.company_id == company_id
     ).first()
 
     if assessment is None:
@@ -172,6 +223,7 @@ def delete_enrollment_assessment(
             detail="Assessment not found"
         )
 
+    ensure_employee_access(context, db, assessment.enrollment.employee_id)
     db.delete(assessment)
     db.commit()
 

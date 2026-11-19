@@ -3,9 +3,17 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import (
+    AuthContext,
+    allowed_employee_ids,
+    ensure_employee_access,
+    get_auth_context,
+    get_db,
+    get_membership_employee,
+)
 
 from backend.app.db.employee import Employee
+from backend.app.db.course import Course
 from backend.app.db.course_session import CourseSession
 from backend.app.db.enrollment import Enrollment
 from backend.app.db.session_attendance import SessionAttendance
@@ -28,9 +36,21 @@ def get_attendance_record(
     company_id: int,
     db: Session
 ):
-    record = db.query(SessionAttendance).filter(
+    record = db.query(SessionAttendance).join(
+        CourseSession,
+        SessionAttendance.session_id == CourseSession.session_id,
+    ).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).join(
+        Employee,
+        SessionAttendance.employee_id == Employee.id,
+    ).filter(
         SessionAttendance.attendance_id == attendance_id,
-        SessionAttendance.company_id == company_id
+        SessionAttendance.company_id == company_id,
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
+        Employee.company_id == company_id,
     ).first()
 
     if record is None:
@@ -46,13 +66,17 @@ def get_attendance_record(
 @router.post("/", response_model=SessionAttendanceResponse, status_code=201)
 def create_attendance(
     company_id: int,
-    recorded_by: int,
     attendance_data: SessionAttendanceCreate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    session = db.query(CourseSession).filter(
+    session = db.query(CourseSession).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).filter(
         CourseSession.session_id == attendance_data.session_id,
-        CourseSession.company_id == company_id
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
     ).first()
 
     if session is None:
@@ -67,32 +91,23 @@ def create_attendance(
             detail="Cannot record attendance for a cancelled session"
         )
 
-    employee = db.query(Employee).filter(
-        Employee.id == attendance_data.employee_id,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
+    employee = ensure_employee_access(
+        context,
+        db,
+        attendance_data.employee_id,
+    )
 
-    if employee is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Employee not found in this company"
-        )
-
-    recorder = db.query(Employee).filter(
-        Employee.id == recorded_by,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if recorder is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Recording employee not found in this company"
-        )
-
-    enrollment = db.query(Enrollment).filter(
+    enrollment = db.query(Enrollment).join(
+        CourseSession,
+        Enrollment.session_id == CourseSession.session_id,
+    ).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).filter(
         Enrollment.company_id == company_id,
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
+        Enrollment.course_id == Course.id,
         Enrollment.session_id == attendance_data.session_id,
         Enrollment.employee_id == attendance_data.employee_id,
         Enrollment.status.in_(["Approved", "In Progress", "Completed"])
@@ -115,13 +130,15 @@ def create_attendance(
             detail="Attendance has already been recorded for this employee"
         )
 
+    actor = get_membership_employee(context, db, required=False)
     record = SessionAttendance(
         company_id=company_id,
         session_id=attendance_data.session_id,
         employee_id=attendance_data.employee_id,
         attendance_status=attendance_data.attendance_status,
         attendance_notes=attendance_data.attendance_notes,
-        recorded_by=recorded_by
+        recorded_by=actor.id if actor else None,
+        recorded_by_user_id=context.user.user_id,
     )
 
     db.add(record)
@@ -138,11 +155,27 @@ def get_attendance_records(
     session_id: int | None = None,
     employee_id: int | None = None,
     attendance_status: str | None = None,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    query = db.query(SessionAttendance).filter(
-        SessionAttendance.company_id == company_id
+    query = db.query(SessionAttendance).join(
+        CourseSession,
+        SessionAttendance.session_id == CourseSession.session_id,
+    ).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).join(
+        Employee,
+        SessionAttendance.employee_id == Employee.id,
+    ).filter(
+        SessionAttendance.company_id == company_id,
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
+        Employee.company_id == company_id,
     )
+    employee_ids = allowed_employee_ids(context, db)
+    if employee_ids is not None:
+        query = query.filter(SessionAttendance.employee_id.in_(employee_ids))
 
     if session_id is not None:
         query = query.filter(
@@ -169,9 +202,12 @@ def get_attendance_records(
 def get_attendance(
     attendance_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    return get_attendance_record(attendance_id, company_id, db)
+    record = get_attendance_record(attendance_id, company_id, db)
+    ensure_employee_access(context, db, record.employee_id)
+    return record
 
 
 # 4. UPDATE ATTENDANCE
@@ -180,15 +216,20 @@ def update_attendance(
     attendance_id: int,
     company_id: int,
     attendance_data: SessionAttendanceUpdate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
     record = get_attendance_record(attendance_id, company_id, db)
+    ensure_employee_access(context, db, record.employee_id)
 
     update_data = attendance_data.model_dump(exclude_unset=True)
 
     for field, value in update_data.items():
         setattr(record, field, value)
 
+    actor = get_membership_employee(context, db, required=False)
+    record.recorded_by = actor.id if actor else None
+    record.recorded_by_user_id = context.user.user_id
     db.commit()
     db.refresh(record)
 
@@ -200,10 +241,11 @@ def update_attendance(
 def check_in(
     attendance_id: int,
     company_id: int,
-    recorded_by: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
     record = get_attendance_record(attendance_id, company_id, db)
+    ensure_employee_access(context, db, record.employee_id)
 
     if record.attendance_status in ["Absent", "Excused"]:
         raise HTTPException(
@@ -217,20 +259,10 @@ def check_in(
             detail="Employee has already checked in"
         )
 
-    recorder = db.query(Employee).filter(
-        Employee.id == recorded_by,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if recorder is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Recording employee not found"
-        )
-
     record.check_in_time = datetime.utcnow()
-    record.recorded_by = recorded_by
+    actor = get_membership_employee(context, db, required=False)
+    record.recorded_by = actor.id if actor else None
+    record.recorded_by_user_id = context.user.user_id
 
     if record.attendance_status == "Pending":
         record.attendance_status = "Present"
@@ -246,10 +278,11 @@ def check_in(
 def check_out(
     attendance_id: int,
     company_id: int,
-    recorded_by: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
     record = get_attendance_record(attendance_id, company_id, db)
+    ensure_employee_access(context, db, record.employee_id)
 
     if record.check_in_time is None:
         raise HTTPException(
@@ -263,20 +296,10 @@ def check_out(
             detail="Employee has already checked out"
         )
 
-    recorder = db.query(Employee).filter(
-        Employee.id == recorded_by,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if recorder is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Recording employee not found"
-        )
-
     record.check_out_time = datetime.utcnow()
-    record.recorded_by = recorded_by
+    actor = get_membership_employee(context, db, required=False)
+    record.recorded_by = actor.id if actor else None
+    record.recorded_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(record)

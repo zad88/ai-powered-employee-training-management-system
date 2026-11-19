@@ -27,6 +27,10 @@ class ImportIssueCorrection(Base):
         nullable=False,
         index=True,
     )
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
 
     original_value: Mapped[str | None] = mapped_column(Text, nullable=True)
     proposed_value: Mapped[str | None] = mapped_column(Text, nullable=True)

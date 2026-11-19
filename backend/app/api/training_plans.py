@@ -3,10 +3,17 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import (
+    AuthContext,
+    allowed_employee_ids,
+    ensure_employee_access,
+    get_auth_context,
+    get_db,
+    get_membership_employee,
+)
 
-from backend.app.db.employee import Employee
 from backend.app.db.training_plan import TrainingPlan
+from backend.app.db.employee import Employee
 
 from backend.app.schemas.training_plan import (
     TrainingPlanCreate,
@@ -23,42 +30,32 @@ router = APIRouter(
 )
 
 
+def _plan_query(db: Session, company_id: int):
+    return db.query(TrainingPlan).join(
+        Employee,
+        TrainingPlan.employee_id == Employee.id,
+    ).filter(
+        TrainingPlan.company_id == company_id,
+        Employee.company_id == company_id,
+    )
+
+
 # 1. CREATE TRAINING PLAN
 @router.post("/", response_model=TrainingPlanResponse, status_code=201)
 def create_training_plan(
     company_id: int,
-    created_by: int,
     plan_data: TrainingPlanCreate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    employee = db.query(Employee).filter(
-        Employee.id == plan_data.employee_id,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if employee is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Employee not found in this company"
-        )
-
-    creator = db.query(Employee).filter(
-        Employee.id == created_by,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if creator is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Plan creator not found in this company"
-        )
+    ensure_employee_access(context, db, plan_data.employee_id)
+    creator = get_membership_employee(context, db, required=False)
 
     new_plan = TrainingPlan(
         **plan_data.model_dump(),
         company_id=company_id,
-        created_by=created_by,
+        created_by=creator.id if creator else None,
+        created_by_user_id=context.user.user_id,
         plan_status="Draft",
         approval_status="Pending"
     )
@@ -77,11 +74,13 @@ def get_training_plans(
     employee_id: int | None = None,
     plan_status: str | None = None,
     approval_status: str | None = None,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    query = db.query(TrainingPlan).filter(
-        TrainingPlan.company_id == company_id
-    )
+    query = _plan_query(db, company_id)
+    employee_ids = allowed_employee_ids(context, db)
+    if employee_ids is not None:
+        query = query.filter(TrainingPlan.employee_id.in_(employee_ids))
 
     if employee_id is not None:
         query = query.filter(
@@ -108,11 +107,11 @@ def get_training_plans(
 def get_training_plan(
     plan_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    plan = db.query(TrainingPlan).filter(
+    plan = _plan_query(db, company_id).filter(
         TrainingPlan.plan_id == plan_id,
-        TrainingPlan.company_id == company_id
     ).first()
 
     if plan is None:
@@ -121,6 +120,7 @@ def get_training_plan(
             detail="Training plan not found"
         )
 
+    ensure_employee_access(context, db, plan.employee_id)
     return plan
 
 
@@ -130,11 +130,11 @@ def update_training_plan(
     plan_id: int,
     company_id: int,
     plan_data: TrainingPlanUpdate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    plan = db.query(TrainingPlan).filter(
+    plan = _plan_query(db, company_id).filter(
         TrainingPlan.plan_id == plan_id,
-        TrainingPlan.company_id == company_id
     ).first()
 
     if plan is None:
@@ -143,6 +143,7 @@ def update_training_plan(
             detail="Training plan not found"
         )
 
+    ensure_employee_access(context, db, plan.employee_id)
     if plan.plan_status != "Draft":
         raise HTTPException(
             status_code=400,
@@ -180,13 +181,12 @@ def update_training_plan(
 def review_training_plan_approval(
     plan_id: int,
     company_id: int,
-    approved_by: int,
     approval_data: TrainingPlanApproval,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    plan = db.query(TrainingPlan).filter(
+    plan = _plan_query(db, company_id).filter(
         TrainingPlan.plan_id == plan_id,
-        TrainingPlan.company_id == company_id
     ).first()
 
     if plan is None:
@@ -195,31 +195,24 @@ def review_training_plan_approval(
             detail="Training plan not found"
         )
 
+    ensure_employee_access(context, db, plan.employee_id)
     if plan.plan_status != "Draft":
         raise HTTPException(
             status_code=400,
             detail="Only draft plans can be approved or rejected"
         )
 
-    approver = db.query(Employee).filter(
-        Employee.id == approved_by,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if approver is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Approving employee not found in this company"
-        )
-
+    approver = get_membership_employee(context, db, required=False)
     if approval_data.approval_status == "Approved":
         plan.plan_status = "Approved"
     else:
         plan.plan_status = "Draft"
 
     plan.approval_status = approval_data.approval_status
-    plan.approved_by = approved_by
+    plan.approved_by = approver.id if approver else None
+    plan.approved_by_user_id = context.user.user_id
+    plan.status_updated_by = approver.id if approver else None
+    plan.status_updated_by_user_id = context.user.user_id
     plan.approval_date = datetime.utcnow()
     plan.approval_comments = approval_data.approval_comments
 
@@ -234,11 +227,11 @@ def review_training_plan_approval(
 def activate_training_plan(
     plan_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    plan = db.query(TrainingPlan).filter(
+    plan = _plan_query(db, company_id).filter(
         TrainingPlan.plan_id == plan_id,
-        TrainingPlan.company_id == company_id
     ).first()
 
     if plan is None:
@@ -247,6 +240,7 @@ def activate_training_plan(
             detail="Training plan not found"
         )
 
+    ensure_employee_access(context, db, plan.employee_id)
     if plan.approval_status != "Approved":
         raise HTTPException(
             status_code=400,
@@ -260,6 +254,9 @@ def activate_training_plan(
         )
 
     plan.plan_status = "Active"
+    actor = get_membership_employee(context, db, required=False)
+    plan.status_updated_by = actor.id if actor else None
+    plan.status_updated_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(plan)
@@ -274,11 +271,11 @@ def complete_training_plan(
     company_id: int,
     actual_total_hours: float | None = None,
     actual_total_cost: float | None = None,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    plan = db.query(TrainingPlan).filter(
+    plan = _plan_query(db, company_id).filter(
         TrainingPlan.plan_id == plan_id,
-        TrainingPlan.company_id == company_id
     ).first()
 
     if plan is None:
@@ -287,6 +284,7 @@ def complete_training_plan(
             detail="Training plan not found"
         )
 
+    ensure_employee_access(context, db, plan.employee_id)
     if plan.plan_status != "Active":
         raise HTTPException(
             status_code=400,
@@ -306,6 +304,9 @@ def complete_training_plan(
         )
 
     plan.plan_status = "Completed"
+    actor = get_membership_employee(context, db, required=False)
+    plan.status_updated_by = actor.id if actor else None
+    plan.status_updated_by_user_id = context.user.user_id
     plan.actual_completion_date = date.today()
     plan.actual_total_hours = actual_total_hours
     plan.actual_total_cost = actual_total_cost
@@ -322,11 +323,11 @@ def review_training_plan(
     plan_id: int,
     company_id: int,
     review_data: TrainingPlanReview,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    plan = db.query(TrainingPlan).filter(
+    plan = _plan_query(db, company_id).filter(
         TrainingPlan.plan_id == plan_id,
-        TrainingPlan.company_id == company_id
     ).first()
 
     if plan is None:
@@ -335,8 +336,10 @@ def review_training_plan(
             detail="Training plan not found"
         )
 
+    ensure_employee_access(context, db, plan.employee_id)
     plan.last_reviewed_at = datetime.utcnow()
     plan.plan_review_notes = review_data.plan_review_notes
+    plan.reviewed_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(plan)

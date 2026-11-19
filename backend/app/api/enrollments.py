@@ -3,7 +3,14 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import (
+    AuthContext,
+    allowed_employee_ids,
+    ensure_employee_access,
+    get_auth_context,
+    get_db,
+    get_membership_employee,
+)
 
 from backend.app.db.employee import Employee
 from backend.app.db.course import Course
@@ -26,24 +33,38 @@ router = APIRouter(
 )
 
 
+def _enrollment_query(db: Session, company_id: int):
+    return db.query(Enrollment).join(
+        Employee,
+        Enrollment.employee_id == Employee.id,
+    ).join(
+        CourseSession,
+        Enrollment.session_id == CourseSession.session_id,
+    ).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).filter(
+        Enrollment.company_id == company_id,
+        Employee.company_id == company_id,
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
+        Enrollment.course_id == Course.id,
+    )
+
+
 # 1. REQUEST ENROLLMENT
 @router.post("/", response_model=EnrollmentResponse, status_code=201)
 def create_enrollment(
     company_id: int,
     enrollment_data: EnrollmentCreate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    employee = db.query(Employee).filter(
-        Employee.id == enrollment_data.employee_id,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if employee is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Employee not found in this company"
-        )
+    employee = ensure_employee_access(
+        context,
+        db,
+        enrollment_data.employee_id,
+    )
 
     session = db.query(CourseSession).filter(
         CourseSession.session_id == enrollment_data.session_id,
@@ -141,11 +162,13 @@ def get_enrollments(
     session_id: int | None = None,
     status: str | None = None,
     approval_status: str | None = None,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    query = db.query(Enrollment).filter(
-        Enrollment.company_id == company_id
-    )
+    query = _enrollment_query(db, company_id)
+    employee_ids = allowed_employee_ids(context, db)
+    if employee_ids is not None:
+        query = query.filter(Enrollment.employee_id.in_(employee_ids))
 
     if employee_id is not None:
         query = query.filter(
@@ -177,9 +200,10 @@ def get_enrollments(
 def get_enrollment(
     enrollment_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    enrollment = db.query(Enrollment).filter(
+    enrollment = _enrollment_query(db, company_id).filter(
         Enrollment.enrollment_id == enrollment_id,
         Enrollment.company_id == company_id
     ).first()
@@ -190,6 +214,7 @@ def get_enrollment(
             detail="Enrollment not found"
         )
 
+    ensure_employee_access(context, db, enrollment.employee_id)
     return enrollment
 
 
@@ -198,11 +223,11 @@ def get_enrollment(
 def review_enrollment(
     enrollment_id: int,
     company_id: int,
-    approved_by: int,
     approval_data: EnrollmentApproval,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    enrollment = db.query(Enrollment).filter(
+    enrollment = _enrollment_query(db, company_id).filter(
         Enrollment.enrollment_id == enrollment_id,
         Enrollment.company_id == company_id
     ).first()
@@ -219,20 +244,10 @@ def review_enrollment(
             detail="This enrollment has already been reviewed"
         )
 
-    approver = db.query(Employee).filter(
-        Employee.id == approved_by,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if approver is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Approving employee not found in this company"
-        )
-
     enrollment.approval_status = approval_data.approval_status
-    enrollment.approved_by = approved_by
+    approver = get_membership_employee(context, db, required=False)
+    enrollment.approved_by = approver.id if approver else None
+    enrollment.approved_by_user_id = context.user.user_id
     enrollment.approval_date = datetime.utcnow()
     enrollment.approval_comments = approval_data.approval_comments
 
@@ -241,7 +256,8 @@ def review_enrollment(
     else:
         enrollment.status = "Rejected"
 
-    enrollment.status_updated_by = approved_by
+    enrollment.status_updated_by = approver.id if approver else None
+    enrollment.status_updated_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(enrollment)
@@ -254,9 +270,10 @@ def review_enrollment(
 def start_enrollment(
     enrollment_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    enrollment = db.query(Enrollment).filter(
+    enrollment = _enrollment_query(db, company_id).filter(
         Enrollment.enrollment_id == enrollment_id,
         Enrollment.company_id == company_id
     ).first()
@@ -267,6 +284,7 @@ def start_enrollment(
             detail="Enrollment not found"
         )
 
+    ensure_employee_access(context, db, enrollment.employee_id)
     if enrollment.approval_status != "Approved":
         raise HTTPException(
             status_code=400,
@@ -282,6 +300,9 @@ def start_enrollment(
     enrollment.status = "In Progress"
     enrollment.started_at = datetime.utcnow()
     enrollment.last_activity_at = datetime.utcnow()
+    actor = get_membership_employee(context, db, required=False)
+    enrollment.status_updated_by = actor.id if actor else None
+    enrollment.status_updated_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(enrollment)
@@ -295,9 +316,10 @@ def update_enrollment_progress(
     enrollment_id: int,
     company_id: int,
     progress_data: EnrollmentProgressUpdate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    enrollment = db.query(Enrollment).filter(
+    enrollment = _enrollment_query(db, company_id).filter(
         Enrollment.enrollment_id == enrollment_id,
         Enrollment.company_id == company_id
     ).first()
@@ -308,6 +330,7 @@ def update_enrollment_progress(
             detail="Enrollment not found"
         )
 
+    ensure_employee_access(context, db, enrollment.employee_id)
     if enrollment.status != "In Progress":
         raise HTTPException(
             status_code=400,
@@ -316,6 +339,9 @@ def update_enrollment_progress(
 
     enrollment.progress_percentage = progress_data.progress_percentage
     enrollment.last_activity_at = datetime.utcnow()
+    actor = get_membership_employee(context, db, required=False)
+    enrollment.status_updated_by = actor.id if actor else None
+    enrollment.status_updated_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(enrollment)
@@ -328,9 +354,10 @@ def update_enrollment_progress(
 def complete_enrollment(
     enrollment_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    enrollment = db.query(Enrollment).filter(
+    enrollment = _enrollment_query(db, company_id).filter(
         Enrollment.enrollment_id == enrollment_id,
         Enrollment.company_id == company_id
     ).first()
@@ -341,6 +368,7 @@ def complete_enrollment(
             detail="Enrollment not found"
         )
 
+    ensure_employee_access(context, db, enrollment.employee_id)
     if enrollment.status != "In Progress":
         raise HTTPException(
             status_code=400,
@@ -351,6 +379,9 @@ def complete_enrollment(
     enrollment.progress_percentage = 100
     enrollment.completed_at = datetime.utcnow()
     enrollment.last_activity_at = datetime.utcnow()
+    actor = get_membership_employee(context, db, required=False)
+    enrollment.status_updated_by = actor.id if actor else None
+    enrollment.status_updated_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(enrollment)
@@ -363,11 +394,11 @@ def complete_enrollment(
 def withdraw_enrollment(
     enrollment_id: int,
     company_id: int,
-    status_updated_by: int,
     withdrawal_data: EnrollmentWithdrawal,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    enrollment = db.query(Enrollment).filter(
+    enrollment = _enrollment_query(db, company_id).filter(
         Enrollment.enrollment_id == enrollment_id,
         Enrollment.company_id == company_id
     ).first()
@@ -378,28 +409,19 @@ def withdraw_enrollment(
             detail="Enrollment not found"
         )
 
+    ensure_employee_access(context, db, enrollment.employee_id)
     if enrollment.status in ["Completed", "Withdrawn", "Rejected", "Failed"]:
         raise HTTPException(
             status_code=400,
             detail="This enrollment cannot be withdrawn"
         )
 
-    employee = db.query(Employee).filter(
-        Employee.id == status_updated_by,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if employee is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Employee not found in this company"
-        )
-
+    actor = get_membership_employee(context, db, required=False)
     enrollment.status = "Withdrawn"
     enrollment.withdrawn_at = datetime.utcnow()
     enrollment.withdrawal_reason = withdrawal_data.withdrawal_reason
-    enrollment.status_updated_by = status_updated_by
+    enrollment.status_updated_by = actor.id if actor else None
+    enrollment.status_updated_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(enrollment)
@@ -412,11 +434,11 @@ def withdraw_enrollment(
 def fail_enrollment(
     enrollment_id: int,
     company_id: int,
-    status_updated_by: int,
     failure_data: EnrollmentFailure,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    enrollment = db.query(Enrollment).filter(
+    enrollment = _enrollment_query(db, company_id).filter(
         Enrollment.enrollment_id == enrollment_id,
         Enrollment.company_id == company_id
     ).first()
@@ -427,27 +449,18 @@ def fail_enrollment(
             detail="Enrollment not found"
         )
 
+    ensure_employee_access(context, db, enrollment.employee_id)
     if enrollment.status not in ["Approved", "In Progress"]:
         raise HTTPException(
             status_code=400,
             detail="Only approved or in-progress enrollments can be failed"
         )
 
-    employee = db.query(Employee).filter(
-        Employee.id == status_updated_by,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if employee is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Employee not found in this company"
-        )
-
+    actor = get_membership_employee(context, db, required=False)
     enrollment.status = "Failed"
     enrollment.failure_reason = failure_data.failure_reason
-    enrollment.status_updated_by = status_updated_by
+    enrollment.status_updated_by = actor.id if actor else None
+    enrollment.status_updated_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(enrollment)

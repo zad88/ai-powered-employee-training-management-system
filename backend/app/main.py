@@ -1,6 +1,8 @@
 ﻿import backend.app.db.models
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+from backend.app.api.dependencies import authorize_business_request
+from backend.app.api.auth import router as auth_router
 from backend.app.api.tna import router as tna_router
 from backend.app.api.employee_imports import router as employee_imports_router
 from backend.app.api.skill_assessments import router as skill_assessments_router
@@ -35,18 +37,20 @@ def home():
 
 
 app.include_router(health_router)
-app.include_router(tna_router)
-app.include_router(employees_router)
-app.include_router(skills_router)
-app.include_router(job_skills_router)
-app.include_router(courses_router)
-app.include_router(course_skills_router)
-app.include_router(skill_assessments_router)
-app.include_router(course_sessions_router)
-app.include_router(training_plans_router)
-app.include_router(plan_courses_router)
-app.include_router(enrollments_router)
-app.include_router(session_attendance_router)
-app.include_router(session_feedback_router)
-app.include_router(enrollment_assessments_router) 
-app.include_router(employee_imports_router)
+app.include_router(auth_router)
+business_auth = [Depends(authorize_business_request)]
+app.include_router(tna_router, dependencies=business_auth)
+app.include_router(employees_router, dependencies=business_auth)
+app.include_router(skills_router, dependencies=business_auth)
+app.include_router(job_skills_router, dependencies=business_auth)
+app.include_router(courses_router, dependencies=business_auth)
+app.include_router(course_skills_router, dependencies=business_auth)
+app.include_router(skill_assessments_router, dependencies=business_auth)
+app.include_router(course_sessions_router, dependencies=business_auth)
+app.include_router(training_plans_router, dependencies=business_auth)
+app.include_router(plan_courses_router, dependencies=business_auth)
+app.include_router(enrollments_router, dependencies=business_auth)
+app.include_router(session_attendance_router, dependencies=business_auth)
+app.include_router(session_feedback_router, dependencies=business_auth)
+app.include_router(enrollment_assessments_router, dependencies=business_auth)
+app.include_router(employee_imports_router, dependencies=business_auth)

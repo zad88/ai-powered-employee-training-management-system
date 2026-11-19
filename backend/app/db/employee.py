@@ -122,7 +122,9 @@ class Employee(Base):
     )
 
     skill_assessments = relationship(
-        "SkillAssessment", back_populates="employee"
+        "SkillAssessment",
+        back_populates="employee",
+        foreign_keys="SkillAssessment.employee_id",
     )
 
     enrollments = relationship(

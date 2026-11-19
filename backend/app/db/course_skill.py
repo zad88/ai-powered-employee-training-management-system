@@ -60,6 +60,10 @@ class CourseSkill(Base):
         ForeignKey("employees.id"),
         nullable=True
     )
+    approved_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
 
     # Course associated with this skill
     course = relationship(

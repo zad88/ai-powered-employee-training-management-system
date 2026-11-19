@@ -64,6 +64,10 @@ class JobSkill(Base):
         ForeignKey("employees.id"),
         nullable=True
     )
+    approved_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
 
     # The skill required by this job
     skill = relationship(

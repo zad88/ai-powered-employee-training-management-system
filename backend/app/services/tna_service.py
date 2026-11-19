@@ -17,7 +17,11 @@ IMPORTANCE_WEIGHTS = {
 }
 
 
-def analyze_company_tna(db: Session, company_id: int) -> dict:
+def analyze_company_tna(
+    db: Session,
+    company_id: int,
+    employee_ids: set[int] | None = None,
+) -> dict:
     """
     Analyse approved job requirements and valid employee assessments.
 
@@ -26,14 +30,13 @@ def analyze_company_tna(db: Session, company_id: int) -> dict:
 
     today = date.today()
 
-    employees = (
-        db.query(Employee)
-        .filter(
-            Employee.company_id == company_id,
-            Employee.is_active.is_(True),
-        )
-        .all()
+    employee_query = db.query(Employee).filter(
+        Employee.company_id == company_id,
+        Employee.is_active.is_(True),
     )
+    if employee_ids is not None:
+        employee_query = employee_query.filter(Employee.id.in_(employee_ids))
+    employees = employee_query.all()
 
     requirements = (
         db.query(JobSkill, Skill)
@@ -42,7 +45,7 @@ def analyze_company_tna(db: Session, company_id: int) -> dict:
         .all()
     )
 
-    assessments = (
+    assessment_query = (
         db.query(SkillAssessment, Employee)
         .join(Employee, Employee.id == SkillAssessment.employee_id)
         .filter(
@@ -55,6 +58,13 @@ def analyze_company_tna(db: Session, company_id: int) -> dict:
                 | (SkillAssessment.expiry_date >= today)
             ),
         )
+    )
+    if employee_ids is not None:
+        assessment_query = assessment_query.filter(
+            Employee.id.in_(employee_ids)
+        )
+    assessments = (
+        assessment_query
         .order_by(
             SkillAssessment.assessment_date.desc(),
             SkillAssessment.assessment_id.desc(),
@@ -103,7 +113,8 @@ def analyze_company_tna(db: Session, company_id: int) -> dict:
     position_names = {
         employee.job_title.strip() for employee in employees
     }
-    position_names.update(position_requirements.keys())
+    if employee_ids is None:
+        position_names.update(position_requirements.keys())
 
     position_analysis = []
 

@@ -1,8 +1,8 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
-
-const COMPANY_ID = 14;
+import { authenticatedFetch } from "../../lib/api";
+import { useAuth } from "../../components/auth-provider";
 
 type TNAData = {
   company_id: number;
@@ -13,8 +13,24 @@ type TNAData = {
     confirmed_skill_gaps: number;
     assessments_needed: number;
   };
-  position_analysis: any[];
-  department_analysis: any[];
+  position_analysis: PositionAnalysis[];
+  department_analysis: DepartmentAnalysis[];
+};
+
+type PositionAnalysis = {
+  job_title: string;
+  employee_count: number;
+  approved_requirement_count: number;
+  pending_requirement_count: number;
+  rejected_requirement_count: number;
+};
+
+type DepartmentAnalysis = {
+  department: string;
+  employee_count: number;
+  confirmed_skill_gaps: number;
+  assessments_needed: number;
+  common_skill_gaps: { skill_name: string; employee_count: number }[];
 };
 
 type AIInsights = {
@@ -35,6 +51,9 @@ type AIInsights = {
 };
 
 export default function TNADashboard() {
+  const { activeMembership } = useAuth();
+  const canGenerateAnalysis =
+    activeMembership !== null && activeMembership.role !== "Employee";
   const [data, setData] = useState<TNAData | null>(null);
   const [insights, setInsights] = useState<AIInsights | null>(null);
   const [loading, setLoading] = useState(true);
@@ -48,7 +67,7 @@ export default function TNADashboard() {
     setError("");
 
     try {
-      const response = await fetch(`/api/tna?company_id=${COMPANY_ID}`);
+      const response = await authenticatedFetch("/api/tna");
 
       if (!response.ok) {
         throw new Error(`Unable to load TNA data (${response.status}).`);
@@ -65,7 +84,8 @@ export default function TNADashboard() {
   }, []);
 
   useEffect(() => {
-    loadAnalysis();
+    const timer = window.setTimeout(() => void loadAnalysis(), 0);
+    return () => window.clearTimeout(timer);
   }, [loadAnalysis]);
 
   async function runAIAnalysis() {
@@ -74,8 +94,8 @@ export default function TNADashboard() {
     setInsights(null);
 
     try {
-      const response = await fetch(
-        `/api/tna/ai-analysis?company_id=${COMPANY_ID}`,
+      const response = await authenticatedFetch(
+        "/api/tna/ai-analysis",
         { method: "POST" }
       );
 
@@ -264,7 +284,7 @@ export default function TNADashboard() {
                   <div className="tna-common-gaps">
                     <strong>Common skill gaps</strong>
                     {department.common_skill_gaps?.length ? (
-                      department.common_skill_gaps.slice(0, 4).map((gap: any) => (
+                      department.common_skill_gaps.slice(0, 4).map((gap) => (
                         <div className="tna-gap-row" key={gap.skill_name}>
                           <span>{gap.skill_name}</span>
                           <span>{gap.employee_count} employees</span>
@@ -292,13 +312,15 @@ export default function TNADashboard() {
                   AI suggestions remain subject to human review.
                 </p>
               </div>
-              <button
-                className="tna-ai-button"
-                onClick={runAIAnalysis}
-                disabled={aiLoading}
-              >
-                {aiLoading ? "Analysing..." : "? Run AI analysis"}
-              </button>
+              {canGenerateAnalysis && (
+                <button
+                  className="tna-ai-button"
+                  onClick={runAIAnalysis}
+                  disabled={aiLoading}
+                >
+                  {aiLoading ? "Analysing..." : "? Run AI analysis"}
+                </button>
+              )}
             </div>
 
             {aiError && (

@@ -3,11 +3,17 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import (
+    AuthContext,
+    allowed_employee_ids,
+    get_auth_context,
+    get_db,
+    get_membership_employee,
+)
 
 from backend.app.db.course import Course
 from backend.app.db.course_session import CourseSession
-from backend.app.db.employee import Employee
+from backend.app.db.enrollment import Enrollment
 
 from backend.app.schemas.course_session import (
     CourseSessionCreate,
@@ -23,6 +29,45 @@ router = APIRouter(
     prefix="/course-sessions",
     tags=["Course Sessions"]
 )
+
+ASSIGNED_ENROLLMENT_STATUSES = ("Approved", "In Progress", "Completed")
+
+
+def _session_query(db: Session, company_id: int):
+    return db.query(CourseSession).join(
+        Course,
+        CourseSession.course_id == Course.id,
+    ).filter(
+        CourseSession.company_id == company_id,
+        Course.company_id == company_id,
+    )
+
+
+def _ensure_session_visible(
+    context: AuthContext,
+    db: Session,
+    session_id: int,
+    company_id: int,
+) -> None:
+    employee_ids = allowed_employee_ids(context, db)
+    if employee_ids is None:
+        return
+    enrollment = db.query(Enrollment.enrollment_id).join(
+        CourseSession,
+        Enrollment.session_id == CourseSession.session_id,
+    ).filter(
+        Enrollment.company_id == company_id,
+        Enrollment.session_id == session_id,
+        Enrollment.course_id == CourseSession.course_id,
+        Enrollment.status.in_(ASSIGNED_ENROLLMENT_STATUSES),
+        CourseSession.company_id == company_id,
+        Enrollment.employee_id.in_(employee_ids),
+    ).first()
+    if enrollment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Course session not found.",
+        )
 
 
 # 1. CREATE COURSE SESSION
@@ -63,11 +108,21 @@ def get_course_sessions(
     company_id: int,
     course_id: int | None = None,
     session_status: str | None = None,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    query = db.query(CourseSession).filter(
-        CourseSession.company_id == company_id
-    )
+    query = _session_query(db, company_id)
+    employee_ids = allowed_employee_ids(context, db)
+    if employee_ids is not None:
+        query = query.join(
+            Enrollment,
+            Enrollment.session_id == CourseSession.session_id,
+        ).filter(
+            Enrollment.company_id == company_id,
+            Enrollment.course_id == CourseSession.course_id,
+            Enrollment.status.in_(ASSIGNED_ENROLLMENT_STATUSES),
+            Enrollment.employee_id.in_(employee_ids),
+        ).distinct()
 
     if course_id is not None:
         query = query.filter(
@@ -89,11 +144,11 @@ def get_course_sessions(
 def get_course_session(
     session_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    session = db.query(CourseSession).filter(
+    session = _session_query(db, company_id).filter(
         CourseSession.session_id == session_id,
-        CourseSession.company_id == company_id
     ).first()
 
     if session is None:
@@ -102,6 +157,7 @@ def get_course_session(
             detail="Course session not found"
         )
 
+    _ensure_session_visible(context, db, session_id, company_id)
     return session
 
 
@@ -113,9 +169,8 @@ def update_course_session(
     session_data: CourseSessionUpdate,
     db: Session = Depends(get_db)
 ):
-    session = db.query(CourseSession).filter(
+    session = _session_query(db, company_id).filter(
         CourseSession.session_id == session_id,
-        CourseSession.company_id == company_id
     ).first()
 
     if session is None:
@@ -172,11 +227,11 @@ def update_session_status(
     session_id: int,
     company_id: int,
     status_data: CourseSessionStatusUpdate,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    session = db.query(CourseSession).filter(
+    session = _session_query(db, company_id).filter(
         CourseSession.session_id == session_id,
-        CourseSession.company_id == company_id
     ).first()
 
     if session is None:
@@ -192,6 +247,9 @@ def update_session_status(
         )
 
     session.session_status = status_data.session_status
+    actor = get_membership_employee(context, db, required=False)
+    session.status_updated_by = actor.id if actor else None
+    session.status_updated_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(session)
@@ -205,11 +263,11 @@ def complete_course_session(
     session_id: int,
     company_id: int,
     completion_data: CourseSessionCompletion,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    session = db.query(CourseSession).filter(
+    session = _session_query(db, company_id).filter(
         CourseSession.session_id == session_id,
-        CourseSession.company_id == company_id
     ).first()
 
     if session is None:
@@ -228,6 +286,9 @@ def complete_course_session(
     session.completion_date = completion_data.completion_date
     session.completion_notes = completion_data.completion_notes
     session.session_status = "Completed"
+    actor = get_membership_employee(context, db, required=False)
+    session.status_updated_by = actor.id if actor else None
+    session.status_updated_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(session)
@@ -240,13 +301,12 @@ def complete_course_session(
 def cancel_course_session(
     session_id: int,
     company_id: int,
-    cancelled_by: int,
     cancellation_data: CourseSessionCancellation,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    session = db.query(CourseSession).filter(
+    session = _session_query(db, company_id).filter(
         CourseSession.session_id == session_id,
-        CourseSession.company_id == company_id
     ).first()
 
     if session is None:
@@ -261,22 +321,14 @@ def cancel_course_session(
             detail="This session is already finalized"
         )
 
-    employee = db.query(Employee).filter(
-        Employee.id == cancelled_by,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if employee is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Cancelling employee not found in this company"
-        )
-
+    actor = get_membership_employee(context, db, required=False)
     session.session_status = "Cancelled"
     session.cancellation_reason = cancellation_data.cancellation_reason
     session.cancelled_at = datetime.now()
-    session.cancelled_by = employee.id
+    session.cancelled_by = actor.id if actor else None
+    session.cancelled_by_user_id = context.user.user_id
+    session.status_updated_by = actor.id if actor else None
+    session.status_updated_by_user_id = context.user.user_id
 
     db.commit()
     db.refresh(session)

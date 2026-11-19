@@ -33,3 +33,4 @@ backend/data/imports/
 *.before_*.bak
 *_before_*.py
 backend/backups/
+/backups/*.dump

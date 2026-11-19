@@ -108,6 +108,18 @@ class CourseSession(Base):
         ForeignKey("employees.id"),
         nullable=True
     )
+    cancelled_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
+    status_updated_by: Mapped[int | None] = mapped_column(
+        ForeignKey("employees.id"),
+        nullable=True,
+    )
+    status_updated_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
 
     # Course relationship
     course = relationship(

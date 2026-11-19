@@ -1,7 +1,12 @@
 ﻿from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import (
+    AuthContext,
+    allowed_employee_ids,
+    get_auth_context,
+    get_db,
+)
 from backend.app.services.tna_service import analyze_company_tna
 from backend.app.agents.tna.graph import tna_graph
 
@@ -15,6 +20,7 @@ router = APIRouter(
 @router.get("/")
 def get_company_tna(
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
     """Return the existing rule-based TNA analysis."""
@@ -27,13 +33,15 @@ def get_company_tna(
 
     return analyze_company_tna(
         db=db,
-        company_id=company_id
+        company_id=company_id,
+        employee_ids=allowed_employee_ids(context, db),
     )
 
 
 @router.post("/ai-analysis")
 def run_ai_tna_analysis(
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
     """Run rule-based TNA analysis followed by the LangGraph AI workflow."""
@@ -47,7 +55,8 @@ def run_ai_tna_analysis(
     # Step 1: Run the existing deterministic analysis.
     analysis = analyze_company_tna(
         db=db,
-        company_id=company_id
+        company_id=company_id,
+        employee_ids=allowed_employee_ids(context, db),
     )
 
     # Step 2: Prepare the initial LangGraph state.

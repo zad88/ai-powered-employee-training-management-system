@@ -91,3 +91,5 @@ class CourseSessionResponse(BaseModel):
     cancellation_reason: str | None = None
     cancelled_at: datetime | None = None
     cancelled_by: int | None = None
+    status_updated_by: int | None = None
+    status_updated_by_user_id: int | None = None

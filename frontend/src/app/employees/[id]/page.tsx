@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { authenticatedFetch } from "../../../lib/api";
 
 type Employee = {
   id: number;
@@ -24,8 +25,6 @@ type Employee = {
   preferred_learning_mode: string | null;
   is_active: boolean;
 };
-
-const COMPANY_ID = 14;
 
 function Field({ label, value }: {
   label: string;
@@ -55,8 +54,8 @@ export default function EmployeeProfilePage() {
         setLoading(true);
         setError("");
 
-        const response = await fetch(
-          `/api/employees/${encodeURIComponent(params.id)}?company_id=${COMPANY_ID}`,
+        const response = await authenticatedFetch(
+          `/api/employees/${encodeURIComponent(params.id)}`,
           { cache: "no-store" }
         );
 

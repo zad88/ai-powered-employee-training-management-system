@@ -2,7 +2,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.app.api.dependencies import get_db
+from backend.app.api.dependencies import (
+    AuthContext,
+    allowed_employee_ids,
+    ensure_employee_access,
+    get_auth_context,
+    get_db,
+)
 from backend.app.db.employee import Employee
 from backend.app.schemas.employee import (
     EmployeeCreate,
@@ -24,6 +30,20 @@ def create_employee(
     company_id: int,
     db: Session = Depends(get_db)
 ):
+    manager_internal_id = None
+    if employee_data.manager_id:
+        manager = db.query(Employee).filter(
+            Employee.company_id == company_id,
+            Employee.employee_id == employee_data.manager_id,
+            Employee.is_active.is_(True),
+        ).first()
+        if manager is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Manager must be an active employee in this company.",
+            )
+        manager_internal_id = manager.id
+
     existing_employee = db.query(Employee).filter(
         Employee.company_id == company_id,
         Employee.employee_id == employee_data.employee_id
@@ -48,7 +68,8 @@ def create_employee(
 
     new_employee = Employee(
         **employee_data.model_dump(),
-        company_id=company_id
+        company_id=company_id,
+        manager_internal_id=manager_internal_id,
     )
 
     db.add(new_employee)
@@ -62,14 +83,18 @@ def create_employee(
 @router.get("/", response_model=list[EmployeeResponse])
 def get_employees(
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    employees = db.query(Employee).filter(
+    query = db.query(Employee).filter(
         Employee.company_id == company_id,
-        Employee.is_active == True
-    ).all()
+        Employee.is_active.is_(True),
+    )
+    employee_ids = allowed_employee_ids(context, db)
+    if employee_ids is not None:
+        query = query.filter(Employee.id.in_(employee_ids))
 
-    return employees
+    return query.order_by(Employee.id).all()
 
 
 # 3. GET ONE ACTIVE EMPLOYEE BY DATABASE ID
@@ -77,21 +102,10 @@ def get_employees(
 def get_employee(
     employee_id: int,
     company_id: int,
+    context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db)
 ):
-    employee = db.query(Employee).filter(
-        Employee.id == employee_id,
-        Employee.company_id == company_id,
-        Employee.is_active == True
-    ).first()
-
-    if employee is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Active employee not found in this company"
-        )
-
-    return employee
+    return ensure_employee_access(context, db, employee_id)
 
 
 # 4. UPDATE EMPLOYEE
@@ -116,6 +130,23 @@ def update_employee(
 
     update_data = employee_data.model_dump(exclude_unset=True)
 
+    if "manager_id" in update_data:
+        manager_id = update_data["manager_id"]
+        manager = None
+        if manager_id:
+            manager = db.query(Employee).filter(
+                Employee.company_id == company_id,
+                Employee.employee_id == manager_id,
+                Employee.is_active.is_(True),
+                Employee.id != employee_id,
+            ).first()
+            if manager is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Manager must be another active employee in this company.",
+                )
+        employee.manager_internal_id = manager.id if manager else None
+
     if "email" in update_data and update_data["email"] is not None:
         existing_email = db.query(Employee).filter(
             Employee.company_id == company_id,
@@ -130,6 +161,8 @@ def update_employee(
             )
 
     for field, value in update_data.items():
+        if field == "manager_id":
+            continue
         setattr(employee, field, value)
 
     db.commit()

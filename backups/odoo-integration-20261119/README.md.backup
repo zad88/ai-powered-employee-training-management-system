@@ -1,0 +1,70 @@
+# AI-Powered Employee Training Management System
+
+## Authentication configuration
+
+Copy `.env.example` to `.env` for the backend and replace the database
+credentials and `JWT_SECRET_KEY` with deployment-specific values. The JWT
+secret must contain at least 32 characters and must not be committed.
+
+Configure `FRONTEND_ORIGINS` as a comma-separated list of trusted browser
+origins for backend cookie-authenticated requests. Configure `FRONTEND_ORIGIN`
+and `BACKEND_URL` in the frontend environment (for example,
+`frontend/.env.local`). In production, use HTTPS and set `NODE_ENV=production`;
+the authentication cookies will then use the Secure attribute. The backend
+rejects cookie-authenticated mutations in production if `FRONTEND_ORIGINS` is
+not configured.
+
+## Database and manager-link setup
+
+After backing up the production database, review the pending Alembic migration
+and apply it during a controlled deployment with
+`python -m alembic upgrade head`. The pending migrations add nullable user
+audit references and access-token revocation storage; they do not reset
+existing business data.
+
+Manager relationships are company-local and use `manager_internal_id`. Run
+`python -m backend.scripts.reconcile_manager_links` to preview existing link
+reconciliation; add `--apply` only after reviewing the dry-run output and
+backing up the database.
+
+## Access-token revocation
+
+Logout revokes only the current JWT by its `jti`; tokens without a valid `jti`
+are rejected and users must sign in again. Revocation records are retained only
+until their token expiry. Schedule
+`python -m backend.scripts.cleanup_expired_token_revocations` to run daily so
+expired records are removed without affecting active sessions.
+
+## Employee imports
+
+Training Managers can upload CSV, Excel (`.xlsx` or `.xls`), and JSON files
+from the Employee Imports page. Uploads are limited to 20 MiB and 10,000 data
+rows. When an Excel workbook has multiple worksheets, select the worksheet
+containing employee records.
+
+JSON input must be a non-empty array of flat employee objects. For example:
+
+```json
+[
+  {
+    "employee_id": "EMP-001",
+    "full_name": "Example Employee",
+    "email": "employee@example.com",
+    "job_title": "Analyst",
+    "department": "Operations",
+    "employment_status": "Active",
+    "hire_date": "2024-01-15",
+    "job_level": "Individual Contributor",
+    "employment_type": "Full-time"
+  }
+]
+```
+
+The upload workflow stages each file, suggests mappings, and previews row-level
+validation before requiring explicit confirmation. Supported mappings include
+employee ID, name, email, department, job title, manager ID/name, employment
+status/type, hire date, job level, working and learning hours, years of
+experience, and preferred learning mode. A `company_id` in a file is not
+imported; the active authenticated company membership determines ownership.
+Invalid rows are not silently discarded: their errors and warnings are shown
+in the preview and retained with the import history.

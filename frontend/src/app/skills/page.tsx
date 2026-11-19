@@ -1,7 +1,8 @@
 ﻿"use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { authenticatedFetch } from "../../lib/api";
 
 type Skill = {
   skill_id: number;
@@ -12,40 +13,19 @@ type Skill = {
   alternative_labels: string | null;
 };
 
-type SkillForm = {
-  skill_name: string;
-  description: string;
-  category: string;
-  esco_concept_uri: string;
-  alternative_labels: string;
-};
-
-const emptyForm: SkillForm = {
-  skill_name: "",
-  description: "",
-  category: "",
-  esco_concept_uri: "",
-  alternative_labels: "",
-};
-
 export default function SkillsPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
-  const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [form, setForm] = useState<SkillForm>(emptyForm);
 
   async function loadSkills() {
     setLoading(true);
     setError("");
 
     try {
-      const response = await fetch("/api/skills", { cache: "no-store" });
+      const response = await authenticatedFetch("/api/skills", { cache: "no-store" });
       if (!response.ok) {
         throw new Error(`Unable to load skills (${response.status}).`);
       }
@@ -60,7 +40,8 @@ export default function SkillsPage() {
   }
 
   useEffect(() => {
-    loadSkills();
+    const timer = window.setTimeout(() => void loadSkills(), 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const categories = useMemo(
@@ -82,100 +63,6 @@ export default function SkillsPage() {
         (category === "All" || skill.category === category);
     });
   }, [skills, search, category]);
-
-  function openCreateForm() {
-    setEditingId(null);
-    setForm(emptyForm);
-    setError("");
-    setSuccess("");
-    setShowForm(true);
-  }
-
-  function openEditForm(skill: Skill) {
-    setEditingId(skill.skill_id);
-    setForm({
-      skill_name: skill.skill_name,
-      description: skill.description ?? "",
-      category: skill.category ?? "",
-      esco_concept_uri: skill.esco_concept_uri ?? "",
-      alternative_labels: skill.alternative_labels ?? "",
-    });
-    setError("");
-    setSuccess("");
-    setShowForm(true);
-  }
-
-  function closeForm() {
-    setShowForm(false);
-    setEditingId(null);
-    setForm(emptyForm);
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError("");
-    setSuccess("");
-
-    if (form.skill_name.trim().length < 2) {
-      setError("Skill name must contain at least two characters.");
-      return;
-    }
-
-    if (form.esco_concept_uri.trim()) {
-      try {
-        new URL(form.esco_concept_uri.trim());
-      } catch {
-        setError("Enter a valid ESCO reference URL.");
-        return;
-      }
-    }
-
-    const payload = {
-      skill_name: form.skill_name.trim(),
-      description: form.description.trim() || null,
-      category: form.category.trim() || null,
-      esco_concept_uri: form.esco_concept_uri.trim() || null,
-      alternative_labels: form.alternative_labels.trim() || null,
-    };
-
-    setSaving(true);
-
-    try {
-      const isEditing = editingId !== null;
-      const response = await fetch(
-        isEditing ? `/api/skills/${editingId}` : "/api/skills/",
-        {
-          method: isEditing ? "PUT" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        }
-      );
-
-      if (!response.ok) {
-        let message = "Unable to save the skill.";
-        try {
-          const data = await response.json();
-          message = typeof data.detail === "string"
-            ? data.detail
-            : JSON.stringify(data.detail ?? data);
-        } catch {
-          // Keep the default error message.
-        }
-        throw new Error(message);
-      }
-
-      setSuccess(isEditing
-        ? "Skill updated successfully."
-        : "Skill created successfully.");
-
-      closeForm();
-      await loadSkills();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to save the skill.");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   return (
     <main className="app-shell">
@@ -219,13 +106,10 @@ export default function SkillsPage() {
               <h1>Skills Catalogue</h1>
               <p>Manage the shared skill reference catalogue used across employee assessments and job requirements.</p>
             </div>
-            <button className="job-skills-submit" onClick={openCreateForm}>
-              + Add skill
-            </button>
+            <span className="skills-readonly">Shared reference catalogue</span>
           </div>
 
           {error && <div className="job-skills-alert error">{error}</div>}
-          {success && <div className="job-skills-alert success">{success}</div>}
 
           <section className="skills-stats">
             <div className="skills-stat">
@@ -250,70 +134,11 @@ export default function SkillsPage() {
             </div>
           </section>
 
-          {showForm && (
-            <section className="skills-panel">
-              <div className="skills-panel-heading">
-                <div>
-                  <h2>{editingId ? "Edit skill" : "Create a new skill"}</h2>
-                  <p>{editingId ? "Update the selected catalogue entry." : "Add a skill to the shared reference catalogue."}</p>
-                </div>
-              </div>
-
-              <form className="job-skills-form" onSubmit={handleSubmit}>
-                <label>
-                  Skill name *
-                  <input required minLength={2} maxLength={150}
-                    value={form.skill_name}
-                    onChange={e => setForm({ ...form, skill_name: e.target.value })}
-                    placeholder="e.g. Python" />
-                </label>
-
-                <label>
-                  Category
-                  <input maxLength={100} value={form.category}
-                    onChange={e => setForm({ ...form, category: e.target.value })}
-                    placeholder="e.g. Technical" />
-                </label>
-
-                <label className="skills-form-full">
-                  Description
-                  <textarea rows={3} value={form.description}
-                    onChange={e => setForm({ ...form, description: e.target.value })}
-                    placeholder="Describe the skill..." />
-                </label>
-
-                <label>
-                  ESCO concept URI
-                  <input type="url" maxLength={500} value={form.esco_concept_uri}
-                    onChange={e => setForm({ ...form, esco_concept_uri: e.target.value })}
-                    placeholder="https://..." />
-                </label>
-
-                <label>
-                  Alternative labels
-                  <input value={form.alternative_labels}
-                    onChange={e => setForm({ ...form, alternative_labels: e.target.value })}
-                    placeholder="Other names for this skill" />
-                </label>
-
-                <div className="job-skills-form-actions skills-form-full">
-                  <button type="submit" className="job-skills-submit" disabled={saving}>
-                    {saving ? "Saving..." : editingId ? "Save changes" : "Create skill"}
-                  </button>
-                  <button type="button" className="job-skills-cancel"
-                    onClick={closeForm} disabled={saving}>
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            </section>
-          )}
-
           <section className="skills-panel">
             <div className="skills-panel-heading">
               <div>
                 <h2>Skills directory</h2>
-                <p>Search, filter and manage existing catalogue entries.</p>
+                <p>Search and filter the globally shared ESCO skills catalogue.</p>
               </div>
               <span className="skills-readonly">SHARED CATALOGUE</span>
             </div>
@@ -369,11 +194,6 @@ export default function SkillsPage() {
                       </a>
                     )}
 
-                    <div className="skills-card-actions">
-                      <button className="job-skills-edit" onClick={() => openEditForm(skill)}>
-                        Edit skill
-                      </button>
-                    </div>
                   </article>
                 ))}
 

@@ -1,13 +1,14 @@
 ﻿"use client";
 
 import { useEffect, useState, FormEvent } from "react";
-
-const COMPANY_ID = 14;
+import { authenticatedFetch } from "../../lib/api";
+import { useAuth } from "../../components/auth-provider";
 
 type Employee = {
   id: number;
   employee_id: string;
   full_name: string;
+  job_title?: string;
   is_active: boolean;
 };
 
@@ -29,6 +30,9 @@ type Requirement = {
 };
 
 export default function JobSkillsPage() {
+  const { activeMembership } = useAuth();
+  const canEdit = activeMembership?.role === "Training Manager";
+  const canApprove = canEdit || activeMembership?.role === "Director";
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -39,7 +43,6 @@ export default function JobSkillsPage() {
   const [statusFilter, setStatusFilter] = useState("All");
   const [jobFilter, setJobFilter] = useState("All");
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [approverId, setApproverId] = useState("");
 
   const [form, setForm] = useState({
     job_title: "",
@@ -55,13 +58,13 @@ export default function JobSkillsPage() {
     try {
       const [requirementsResponse, employeesResponse, skillsResponse] =
         await Promise.all([
-          fetch(`/api/job-skills?company_id=${COMPANY_ID}`, {
+          authenticatedFetch("/api/job-skills", {
             cache: "no-store",
           }),
-          fetch(`/api/employees?company_id=${COMPANY_ID}`, {
+          authenticatedFetch("/api/employees", {
             cache: "no-store",
           }),
-          fetch("/api/skills", { cache: "no-store" }),
+          authenticatedFetch("/api/skills", { cache: "no-store" }),
         ]);
 
       if (
@@ -95,7 +98,8 @@ export default function JobSkillsPage() {
   }
 
   useEffect(() => {
-    loadData();
+    const timer = window.setTimeout(() => void loadData(), 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   function resetForm() {
@@ -128,8 +132,8 @@ export default function JobSkillsPage() {
     try {
       const isEditing = editingId !== null;
       const url = isEditing
-        ? `/api/job-skills/${editingId}?company_id=${COMPANY_ID}`
-        : `/api/job-skills?company_id=${COMPANY_ID}`;
+        ? `/api/job-skills/${editingId}`
+        : "/api/job-skills";
 
       const payload = isEditing
         ? {
@@ -143,7 +147,7 @@ export default function JobSkillsPage() {
             importance: form.importance,
           };
 
-      const response = await fetch(url, {
+      const response = await authenticatedFetch(url, {
         method: isEditing ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -188,20 +192,6 @@ export default function JobSkillsPage() {
     setError("");
     setSuccess("");
 
-    if (!approverId) {
-      setError("Select the active employee who is approving this requirement.");
-      return;
-    }
-
-    const approver = employees.find(
-      (employee) => employee.id === Number(approverId)
-    );
-
-    if (!approver) {
-      setError("The selected approver is not an active employee.");
-      return;
-    }
-
     if (
       !window.confirm(
         `Are you sure you want to ${approvalStatus.toLowerCase()} this requirement?`
@@ -211,8 +201,8 @@ export default function JobSkillsPage() {
     }
 
     try {
-      const response = await fetch(
-        `/api/job-skills/${item.id}/approval?company_id=${COMPANY_ID}&approved_by=${approver.id}`,
+      const response = await authenticatedFetch(
+        `/api/job-skills/${item.id}/approval`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -315,7 +305,7 @@ export default function JobSkillsPage() {
         </div>
       </section>
 
-      <section className="job-skills-panel">
+      {canEdit && <section className="job-skills-panel">
         <div className="job-skills-section-heading">
           <div>
             <h2>{editingId ? "Edit requirement" : "Add job requirement"}</h2>
@@ -354,7 +344,7 @@ export default function JobSkillsPage() {
                     {Array.from(
                       new Set(
                         employees
-                          .map((employee) => (employee as any).job_title)
+                          .map((employee) => employee.job_title)
                           .filter(Boolean)
                       )
                     ).map((title) => (
@@ -443,7 +433,7 @@ export default function JobSkillsPage() {
             </div>
           </form>
         )}
-      </section>
+      </section>}
 
       <section className="job-skills-panel">
         <div className="job-skills-section-heading">
@@ -483,27 +473,6 @@ export default function JobSkillsPage() {
           </label>
         </div>
 
-        <div className="job-skills-approver">
-          <label>
-            Approving employee
-            <select
-              value={approverId}
-              onChange={(event) => setApproverId(event.target.value)}
-            >
-              <option value="">Select an active employee</option>
-              {employees.map((employee) => (
-                <option key={employee.id} value={employee.id}>
-                  {employee.full_name} — {employee.employee_id}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p>
-            The selected employee's internal database ID will be sent to the
-            approval API.
-          </p>
-        </div>
-
         {filteredRequirements.length === 0 ? (
           <p className="job-skills-empty">
             No requirements match the selected filters.
@@ -539,13 +508,13 @@ export default function JobSkillsPage() {
                     <td>{getApproverName(item.approved_by)}</td>
                     <td>
                       <div className="job-skills-actions">
-                        <button
+                        {canEdit && <button
                           className="job-skills-edit"
                           onClick={() => startEditing(item)}
                         >
                           Edit
-                        </button>
-                        {item.approval_status === "Pending" && (
+                        </button>}
+                        {canApprove && item.approval_status === "Pending" && (
                           <>
                             <button
                               className="job-skills-approve"
