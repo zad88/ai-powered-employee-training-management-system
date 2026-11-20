@@ -330,7 +330,9 @@ def enforce_business_route_policy(request: Request) -> None:
 
     allowed = read_all if method in {"GET", "HEAD", "OPTIONS"} else training_manager
 
-    if route_path.startswith("/skills"):
+    if route_path.startswith("/esco-occupations"):
+        allowed = read_all if method in {"GET", "HEAD", "OPTIONS"} else set()
+    elif route_path.startswith("/skills"):
         allowed = read_all if method in {"GET", "HEAD", "OPTIONS"} else set()
     elif route_path.startswith("/employee-imports"):
         allowed = (

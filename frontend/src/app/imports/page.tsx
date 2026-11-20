@@ -75,15 +75,24 @@ type StagedImport = {
   available_fields: string[];
   available_sheets: string[];
   worksheet: string | null;
+  retrieved_at?: string | null;
 };
 
 type ImportPreview = {
   batch_id: number;
+  retrieved_at?: string | null;
+  row_edits?: Record<string, Record<string, unknown>>;
+  source_decisions?: Record<string, "update" | "keep">;
+  source_status_counts?: Record<string, number>;
   rows: Array<{
     row_number: number;
     data: Record<string, unknown>;
     errors: Array<{ field?: string; message: string; type: string }>;
     warnings: Array<{ field?: string; message: string; type: string }>;
+    source_reference?: string | null;
+    source_status?: "new" | "previously_imported" | "changed" | "duplicate";
+    source_changes?: Array<{ field: string; previous_value?: unknown; current_value?: unknown }>;
+    manually_edited_fields?: string[];
     importable: boolean;
   }>;
   errors: Array<{ row_number: number | null; field?: string; message: string; type: string }>;
@@ -96,6 +105,7 @@ type ImportPreview = {
     total_errors: number;
     total_warnings: number;
     ready_for_confirmation: boolean;
+    skipped_rows?: number;
   };
 };
 
@@ -119,6 +129,8 @@ type ImportResult = {
     failed_rows: number;
     total_errors: number;
     total_warnings: number;
+    updated_rows?: number;
+    skipped_rows?: number;
   };
 };
 
@@ -126,7 +138,6 @@ type OdooStatus = {
   configured: boolean;
   base_url?: string;
   database?: string;
-  username?: string;
   api_key_configured?: boolean;
   missing_configuration?: string;
 };
@@ -148,6 +159,20 @@ type OdooTestResult = {
 };
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ODOO_METADATA_COLUMNS = new Set([
+  "_odoo_source_reference",
+  "_odoo_employee_id_generated",
+  "odoo_create_date",
+  "odoo_write_date",
+]);
+
+function displayFieldName(field: string) {
+  return field.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function inputValue(value: unknown) {
+  return value == null ? "" : String(value);
+}
 
 export default function Home() {
   const { activeMembership } = useAuth();
@@ -186,6 +211,11 @@ export default function Home() {
   const [includeArchived, setIncludeArchived] = useState(false);
   const [odooEmployeeIds, setOdooEmployeeIds] = useState("");
   const [odooLoading, setOdooLoading] = useState(false);
+  const [rowDrafts, setRowDrafts] = useState<Record<number, Record<string, string>>>({});
+  const [sourceDecisionDrafts, setSourceDecisionDrafts] = useState<
+    Record<string, "update" | "keep" | "">
+  >({});
+  const [savingReviewRow, setSavingReviewRow] = useState<number | null>(null);
 
   const api = useCallback(async <T,>(
     path: string,
@@ -280,7 +310,10 @@ export default function Home() {
     setError("");
     setSuccess("");
     setImportPreview(null);
+    setStagedImport(null);
     setImportResult(null);
+    setRowDrafts({});
+    setSourceDecisionDrafts({});
     const employeeIds = odooEmployeeIds
       .split(",")
       .map((value) => Number(value.trim()))
@@ -310,12 +343,15 @@ export default function Home() {
         available_fields: preview.available_fields,
         available_sheets: preview.available_sheets,
         worksheet: preview.worksheet,
+        retrieved_at: preview.retrieved_at,
       });
       setColumnMapping(preview.column_mapping);
       setBatchId(String(preview.batch_id));
       setImportPreview(preview);
+      setRowDrafts({});
+      setSourceDecisionDrafts({});
       setSuccess(
-        `Fetched ${preview.total_rows} Odoo employee records. Preview does not create employees.`
+        `Retrieved ${preview.summary.total_rows} Odoo employee records. Preview does not create employees.`
       );
       await loadImportHistory();
     } catch (err) {
@@ -387,8 +423,8 @@ export default function Home() {
     }
   }
 
-  async function previewStagedImport() {
-    if (!stagedImport) return;
+  async function previewStagedImport(): Promise<boolean> {
+    if (!stagedImport) return false;
     setPreviewingImport(true);
     setError("");
     setSuccess("");
@@ -403,17 +439,81 @@ export default function Home() {
         }
       );
       setImportPreview(preview);
+      setRowDrafts({});
+      setSourceDecisionDrafts({});
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to preview this import.");
+      return false;
     } finally {
       setPreviewingImport(false);
     }
   }
 
+  async function saveOdooRowReview(row: ImportPreview["rows"][number]) {
+    if (!stagedImport || stagedImport.source_type !== "ODOO" || !importPreview) {
+      return;
+    }
+    const draft = rowDrafts[row.row_number] ?? {};
+    const values = Object.fromEntries(
+      Object.entries(draft).filter(
+        ([field, value]) => value !== inputValue(row.data[field])
+      )
+    );
+    const reference = row.source_reference;
+    const selectedDecision = reference
+      ? sourceDecisionDrafts[reference] ?? ""
+      : "";
+    const currentDecision = reference
+      ? importPreview.source_decisions?.[reference] ?? ""
+      : "";
+    const sourceDecision =
+      selectedDecision && selectedDecision !== currentDecision
+        ? selectedDecision
+        : undefined;
+    if (Object.keys(values).length === 0 && !sourceDecision) return;
+
+    setSavingReviewRow(row.row_number);
+    setError("");
+    setSuccess("");
+    try {
+      await api(
+        `/api/employee-imports/${stagedImport.batch_id}/rows`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            rows: [{
+              row_number: row.row_number,
+              values,
+              ...(sourceDecision ? { source_decision: sourceDecision } : {}),
+            }],
+          }),
+        }
+      );
+      if (await previewStagedImport()) {
+        setSuccess(`Saved and revalidated Odoo source row ${row.row_number}.`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save this Odoo row.");
+    } finally {
+      setSavingReviewRow(null);
+    }
+  }
+
   async function confirmStagedImport() {
-    if (!stagedImport || !importPreview?.summary.ready_for_confirmation) return;
+    if (
+      !stagedImport ||
+      !importPreview?.summary.ready_for_confirmation ||
+      (
+        importPreview.summary.importable_rows === 0 &&
+        !(stagedImport.source_type === "ODOO" && (importPreview.summary.skipped_rows ?? 0) > 0)
+      )
+    ) return;
+    const importingRows = importPreview.summary.importable_rows;
     if (!window.confirm(
-      `Import ${importPreview.summary.importable_rows} valid employee records? ${importPreview.summary.invalid_rows} invalid records will remain unimported and be recorded for review.`
+      importingRows > 0
+        ? `Import ${importingRows} valid employee records? ${importPreview.summary.invalid_rows} invalid records will remain unimported and be recorded for review.`
+        : "Close this Odoo review batch without importing employee records?"
     )) return;
 
     setConfirmingImport(true);
@@ -787,9 +887,19 @@ export default function Home() {
                     onClick={() => void fetchOdooPreview()}
                     disabled={odooLoading}
                   >
-                    {odooLoading ? "Fetching..." : "Fetch employees and preview"}
+                    {odooLoading
+                      ? "Fetching latest records..."
+                      : stagedImport?.source_type === "ODOO"
+                        ? "Refresh from Odoo"
+                        : "Fetch from Odoo"}
                   </button>
                 </div>
+                {stagedImport?.source_type === "ODOO" && stagedImport.retrieved_at && (
+                  <p className="retrieval-meta">
+                    Last successful retrieval: {new Date(stagedImport.retrieved_at).toLocaleString()}
+                    {" · "}{stagedImport.total_rows} records retrieved.
+                  </p>
+                )}
               </section>
             )}
 
@@ -859,26 +969,44 @@ export default function Home() {
                     <div className="section-heading">
                       <div>
                         <h2>Map source fields</h2>
-                        <p>Unmapped columns are ignored. Company ownership always comes from your active membership.</p>
+                        <p>Choose an application destination for each source column. Unmapped and internal metadata columns are ignored.</p>
                       </div>
                     </div>
-                    <div className="filter-bar">
+                    <div className="mapping-table">
+                      <div className="mapping-row mapping-heading">
+                        <strong>Source column</strong>
+                        <strong>Application destination</strong>
+                      </div>
                       {stagedImport.columns.map((column) => (
-                        <label className="field" key={column}>
-                          <span>{column}</span>
+                        <div className="mapping-row" key={column}>
+                          <div className="mapping-source">
+                            <strong>{column}</strong>
+                            {stagedImport.source_type === "ODOO" && ODOO_METADATA_COLUMNS.has(column) && (
+                              <small>Internal metadata · not importable</small>
+                            )}
+                          </div>
                           <select
                             value={columnMapping[column] ?? ""}
+                            disabled={
+                              stagedImport?.source_type === "ODOO" &&
+                              ODOO_METADATA_COLUMNS.has(column)
+                            }
                             onChange={(event) => setColumnMapping((current) => ({
                               ...current,
                               [column]: event.target.value || null,
                             }))}
                           >
-                            <option value="">Do not import</option>
+                            <option value="">
+                              {stagedImport.source_type === "ODOO" &&
+                              ODOO_METADATA_COLUMNS.has(column)
+                                ? "Ignored internal metadata"
+                                : "Do not import"}
+                            </option>
                             {stagedImport.available_fields.map((field) => (
-                              <option key={field} value={field}>{field.replaceAll("_", " ")}</option>
+                              <option key={field} value={field}>{displayFieldName(field)}</option>
                             ))}
                           </select>
-                        </label>
+                        </div>
                       ))}
                     </div>
                     <button
@@ -907,8 +1035,17 @@ export default function Home() {
                       <div className="stat-card"><span>Total rows</span><strong>{importPreview.summary.total_rows}</strong></div>
                       <div className="stat-card"><span>Importable</span><strong>{importPreview.summary.importable_rows}</strong></div>
                       <div className="stat-card"><span>Invalid</span><strong>{importPreview.summary.invalid_rows}</strong></div>
-                      <div className="stat-card"><span>Warnings</span><strong>{importPreview.summary.total_warnings}</strong></div>
+                      <div className="stat-card"><span>Previously imported / skipped</span><strong>{importPreview.summary.skipped_rows ?? 0}</strong></div>
                     </section>
+                    {importPreview.source_status_counts && (
+                      <div className="source-counts">
+                        {Object.entries(importPreview.source_status_counts).map(([status, count]) => (
+                          <span key={status} className={`source-badge ${status}`}>
+                            {displayFieldName(status)}: {count}
+                          </span>
+                        ))}
+                      </div>
+                    )}
 
                     {importPreview.missing_mappings.length > 0 && (
                       <div className="alert error">
@@ -934,17 +1071,101 @@ export default function Home() {
                                   <span>{String(row.data.full_name ?? row.data.employee_id ?? "Employee record")}</span>
                                 </div>
                               </div>
-                              <span className={row.importable ? "review-status saved" : "review-status"}>
-                                {row.importable ? "Ready to import" : "Needs correction"}
-                              </span>
+                              <div className="row-statuses">
+                                {row.source_status && (
+                                  <span className={`source-badge ${row.source_status}`}>
+                                    {{
+                                      new: "New from Odoo",
+                                      previously_imported: "Previously imported",
+                                      changed: "Odoo data changed",
+                                      duplicate: "Already staged",
+                                    }[row.source_status]}
+                                  </span>
+                                )}
+                                <span className={row.importable ? "review-status saved" : "review-status"}>
+                                  {row.importable ? "Ready to import" : "Needs review"}
+                                </span>
+                              </div>
                             </div>
-                            <p>
-                              {Object.entries(row.data)
-                                .map(([field, value]) => (
-                                  `${field.replaceAll("_", " ")}: ${String(value ?? "—")}`
-                                ))
-                                .join(" · ")}
-                            </p>
+                            {stagedImport?.source_type === "ODOO" ? (
+                              <>
+                                <div className="editable-fields">
+                                  {stagedImport.available_fields.map((field) => {
+                                    const manuallyEdited = row.manually_edited_fields?.includes(field) ?? false;
+                                    return (
+                                      <label className="field" key={field}>
+                                        <span>
+                                          {displayFieldName(field)}
+                                          {manuallyEdited && <small className="manual-edit-mark"> · manually edited</small>}
+                                        </span>
+                                        <input
+                                          value={
+                                            rowDrafts[row.row_number]?.[field] ??
+                                            inputValue(row.data[field])
+                                          }
+                                          onChange={(event) => setRowDrafts((current) => ({
+                                            ...current,
+                                            [row.row_number]: {
+                                              ...current[row.row_number],
+                                              [field]: event.target.value,
+                                            },
+                                          }))}
+                                        />
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                                {row.source_reference && (
+                                  <small className="source-reference">
+                                    Odoo reference: {row.source_reference}
+                                  </small>
+                                )}
+                                {row.source_status === "changed" && row.source_reference && (
+                                  <div className="source-decision">
+                                    <label className="field">
+                                      <span>Review existing employee</span>
+                                      <select
+                                        value={
+                                          sourceDecisionDrafts[row.source_reference] ??
+                                          importPreview.source_decisions?.[row.source_reference] ??
+                                          ""
+                                        }
+                                        onChange={(event) => setSourceDecisionDrafts((current) => ({
+                                          ...current,
+                                          [row.source_reference!]:
+                                            event.target.value as "update" | "keep" | "",
+                                        }))}
+                                      >
+                                        <option value="">Choose an action</option>
+                                        <option value="update">Update application employee</option>
+                                        <option value="keep">Leave application employee unchanged</option>
+                                      </select>
+                                    </label>
+                                    {row.source_changes?.map((change) => (
+                                      <span key={change.field}>
+                                        {displayFieldName(change.field)} changed
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                <button
+                                  className="button secondary small"
+                                  onClick={() => void saveOdooRowReview(row)}
+                                  disabled={savingReviewRow === row.row_number}
+                                >
+                                  {savingReviewRow === row.row_number ? "Saving..." : "Save corrections"}
+                                </button>
+                              </>
+                            ) : (
+                              <div className="field-value-grid">
+                                {Object.entries(row.data).map(([field, value]) => (
+                                  <div key={field}>
+                                    <small>{displayFieldName(field)}</small>
+                                    <strong>{inputValue(value) || "—"}</strong>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                             {(row.errors.length > 0 || row.warnings.length > 0) && (
                               <ul>
                                 {row.errors.map((item, index) => (
@@ -986,10 +1207,20 @@ export default function Home() {
                         disabled={
                           confirmingImport ||
                           !importPreview.summary.ready_for_confirmation ||
-                          importPreview.summary.importable_rows === 0
+                          (
+                            importPreview.summary.importable_rows === 0 &&
+                            !(
+                              stagedImport?.source_type === "ODOO" &&
+                              (importPreview.summary.skipped_rows ?? 0) > 0
+                            )
+                          )
                         }
                       >
-                        {confirmingImport ? "Importing..." : "Confirm and import valid rows"}
+                        {confirmingImport
+                          ? "Confirming..."
+                          : importPreview.summary.importable_rows === 0
+                            ? "Close review without importing"
+                            : "Confirm and import valid rows"}
                       </button>
                     </div>
                   </section>
@@ -1001,6 +1232,7 @@ export default function Home() {
                     <div className="result-grid">
                       <div><strong>{importResult.summary.total_rows}</strong><span>Total rows</span></div>
                       <div><strong>{importResult.summary.successful_rows}</strong><span>Imported</span></div>
+                      <div><strong>{importResult.summary.updated_rows ?? 0}</strong><span>Updated by review</span></div>
                       <div><strong>{importResult.summary.failed_rows}</strong><span>Failed</span></div>
                       <div><strong>{importResult.summary.total_errors}</strong><span>Errors</span></div>
                     </div>

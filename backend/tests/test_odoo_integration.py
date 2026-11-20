@@ -50,6 +50,7 @@ class MockOdooAdapter:
             "active": {"type": "boolean"},
             "identification_id": {"type": "char"},
             "barcode": {"type": "char"},
+            "contract_date_start": {"type": "date"},
         }
         self.records = [
             {
@@ -62,6 +63,7 @@ class MockOdooAdapter:
                 "active": True,
                 "identification_id": "EMP-A",
                 "barcode": False,
+                "contract_date_start": "2023-01-15",
             },
             {
                 "id": 102,
@@ -73,6 +75,7 @@ class MockOdooAdapter:
                 "active": True,
                 "identification_id": False,
                 "barcode": "EMP-B",
+                "contract_date_start": "2024-02-01",
             },
         ]
 
@@ -93,6 +96,51 @@ class MockOdooAdapter:
         return self.records[offset:offset + limit]
 
 
+def test_employee_fetch_paginates_beyond_former_default_limit():
+    class LargeAdapter:
+        name = "Large mock"
+        total = 10_001
+
+        def __init__(self):
+            self.offsets = []
+
+        def fields_get(self, _model):
+            return {"id": {"type": "integer"}, "name": {"type": "char"}}
+
+        def search_count(self, _model, _domain):
+            return self.total
+
+        def search_read(
+            self,
+            _model,
+            _domain,
+            _fields,
+            offset=0,
+            limit=500,
+        ):
+            self.offsets.append(offset)
+            return [
+                {"id": record_id, "name": f"Employee {record_id}"}
+                for record_id in range(offset + 1, min(offset + limit, self.total) + 1)
+            ]
+
+    adapter = LargeAdapter()
+    result = OdooClient(
+        OdooConfig(
+            "http://localhost:8069",
+            "odoo_training_test",
+            "integration",
+            "test-key",
+            30,
+        ),
+        adapter=adapter,
+    ).fetch_employees()
+
+    assert result["total"] == 10_001
+    assert len(result["records"]) == 10_001
+    assert adapter.offsets == list(range(0, 10_001, 500))
+
+
 def test_config_requires_safe_environment(monkeypatch):
     monkeypatch.delenv("ODOO_BASE_URL", raising=False)
     monkeypatch.delenv("ODOO_DATABASE", raising=False)
@@ -111,6 +159,12 @@ def test_config_accepts_localhost_http(monkeypatch):
     config = OdooConfig.from_env()
     assert config.database == "odoo_training_test"
     assert config.safe_status()["api_key_configured"] is True
+    assert set(config.safe_status()) == {
+        "configured",
+        "base_url",
+        "database",
+        "api_key_configured",
+    }
     assert "test-key" not in repr(config.safe_status())
 
 
@@ -281,6 +335,10 @@ def test_normalization_maps_relationships_and_preserves_source_reference():
     assert rows[1]["manager_name"] == "Ahmed Hassan"
     assert rows[0]["employee_id"] == "EMP-A"
     assert rows[1]["employee_id"] == "EMP-B"
+    assert rows[0]["hire_date"] is None
+    assert rows[0]["contract_start_date"] == "2023-01-15"
+    assert mapping["hire_date"] == "hire_date"
+    assert mapping["contract_start_date"] is None
     assert rows[0]["_odoo_source_reference"] == (
         "odoo_training_test:101"
     )

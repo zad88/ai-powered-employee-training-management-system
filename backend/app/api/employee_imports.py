@@ -1,9 +1,9 @@
 import json
 import shutil
 from collections import Counter
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -17,7 +17,7 @@ from fastapi import (
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.app.api.dependencies import AuthContext, get_auth_context, get_db
 from backend.app.db.company import Company
@@ -35,6 +35,7 @@ from backend.app.services.data_correction import correct_email, classify_duplica
 from backend.app.services.employee_import_pipeline import (
     APPROVED_DEFAULTS,
     AVAILABLE_MAPPING_FIELDS,
+    EMPLOYEE_FIELDS,
     build_employee_import_preview,
     employee_model_values,
     suggested_column_mapping,
@@ -48,6 +49,7 @@ from backend.app.services.odoo_client import (
     OdooUnavailableError,
     OdooClient,
     OdooConfig,
+    detect_odoo_version,
     normalize_odoo_employees,
 )
 
@@ -319,6 +321,113 @@ class OdooFetchPreviewRequest(BaseModel):
     column_mapping: dict[str, str | None] | None = None
 
 
+class ImportRowReview(BaseModel):
+    row_number: int
+    values: dict[str, Any] = Field(default_factory=dict)
+    source_decision: Literal["update", "keep"] | None = None
+
+
+class ImportRowReviewRequest(BaseModel):
+    rows: list[ImportRowReview]
+
+
+def _row_overrides(metadata: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    stored = metadata.get("row_edits", {})
+    if not isinstance(stored, dict):
+        return {}
+    overrides = {}
+    for row_number, values in stored.items():
+        if not isinstance(values, dict):
+            continue
+        try:
+            parsed_row_number = int(row_number)
+        except (TypeError, ValueError):
+            continue
+        overrides[parsed_row_number] = values
+    return overrides
+
+
+def _odoo_source_decisions(metadata: dict[str, Any]) -> dict[str, str]:
+    decisions = metadata.get("source_decisions", {})
+    if not isinstance(decisions, dict):
+        return {}
+    return {
+        reference: decision
+        for reference, decision in decisions.items()
+        if isinstance(reference, str) and decision in {"update", "keep"}
+    }
+
+
+def _odoo_update_employee_ids(
+    db: Session,
+    company_id: int,
+    source_rows: list[dict[str, Any]],
+    decisions: dict[str, str],
+) -> set[int]:
+    if not decisions:
+        return set()
+    imported_sources, _ = _odoo_source_history(db, company_id)
+    employee_ids = set()
+    for row in source_rows:
+        reference = row.get("_odoo_source_reference")
+        if not isinstance(reference, str) or decisions.get(reference) != "update":
+            continue
+        imported = imported_sources.get(reference)
+        employee = imported.get("employee") if imported else None
+        if employee is not None:
+            employee_ids.add(employee.id)
+    return employee_ids
+
+
+def _require_training_manager(context: AuthContext) -> None:
+    if context.role != "Training Manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Only Training Managers may manage employee imports.",
+        )
+
+
+def _assert_odoo_source_is_current(
+    config: OdooConfig,
+    metadata: dict[str, Any],
+    staged_rows: list[dict[str, Any]],
+) -> None:
+    staged_snapshots = metadata.get("odoo_source_snapshots")
+    if not isinstance(staged_snapshots, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="This Odoo batch has no source version. Fetch it again before confirming.",
+        )
+    staged_references = {
+        row.get("_odoo_source_reference")
+        for row in staged_rows
+        if isinstance(row.get("_odoo_source_reference"), str)
+    }
+    if staged_references != set(staged_snapshots):
+        raise HTTPException(
+            status_code=409,
+            detail="The staged Odoo source data is incomplete. Fetch it again before confirming.",
+        )
+    options = metadata.get("odoo_fetch_options", {})
+    if not isinstance(options, dict):
+        options = {}
+    fetched = OdooClient(config).fetch_employees(
+        include_archived=bool(options.get("include_archived", False)),
+        odoo_company_id=options.get("odoo_company_id"),
+        employee_ids=options.get("employee_ids"),
+    )
+    _, latest_rows, _ = normalize_odoo_employees(
+        fetched["records"],
+        odoo_database=config.database,
+    )
+    latest_snapshots = _odoo_snapshots_by_reference(latest_rows)
+    if latest_snapshots != staged_snapshots:
+        raise HTTPException(
+            status_code=409,
+            detail="Odoo records changed after preview. Fetch and review the latest version before confirming.",
+        )
+
+
 def _safe_odoo_http_error(exc: OdooError) -> HTTPException:
     if isinstance(exc, OdooConfigurationError):
         status_code = 400
@@ -331,18 +440,87 @@ def _safe_odoo_http_error(exc: OdooError) -> HTTPException:
     return HTTPException(status_code=status_code, detail=str(exc))
 
 
-def _odoo_existing_source_references(
+ODOO_METADATA_COLUMNS = {
+    "_odoo_source_reference",
+    "_odoo_employee_id_generated",
+    "odoo_create_date",
+    "odoo_write_date",
+}
+
+
+def _odoo_source_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    snapshot_fields = (
+        "employee_id",
+        "full_name",
+        "email",
+        "department",
+        "job_title",
+        "manager_name",
+        "employment_status",
+        "hire_date",
+        "contract_start_date",
+        "employment_type",
+        "job_level",
+        "odoo_write_date",
+    )
+    return {
+        field: json_safe(row.get(field))
+        for field in snapshot_fields
+        if field in row
+    }
+
+
+def _odoo_snapshots_by_reference(
+    rows: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        reference: _odoo_source_snapshot(row)
+        for row in rows
+        if isinstance(
+            reference := row.get("_odoo_source_reference"),
+            str,
+        )
+    }
+
+
+def _odoo_mapping(
+    mapping: dict[str, str | None],
+    columns: list[str],
+    *,
+    reject_metadata_mapping: bool = True,
+) -> dict[str, str | None]:
+    unknown_columns = set(mapping) - set(columns)
+    if unknown_columns:
+        raise ValueError("The mapping contains Odoo columns not in the fetched data.")
+    normalized = {column: mapping.get(column) for column in columns}
+    for column in ODOO_METADATA_COLUMNS.intersection(normalized):
+        if reject_metadata_mapping and normalized[column] is not None:
+            raise ValueError("Odoo metadata columns cannot be mapped to employee fields.")
+        normalized[column] = None
+    return normalized
+
+
+def _odoo_source_history(
     db: Session,
     company_id: int,
     *,
     exclude_batch_id: int | None = None,
-) -> set[str]:
-    employee_ids: set[str] = set()
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    imported_sources: dict[str, dict[str, Any]] = {}
+    pending_references: set[str] = set()
+    company_employees = db.query(Employee).filter(
+        Employee.company_id == company_id,
+    ).all()
+    employees_by_id = {employee.id: employee for employee in company_employees}
+    employees_by_code = {
+        employee.employee_id.strip().casefold(): employee
+        for employee in company_employees
+    }
     batches = db.query(ImportBatch).filter(
         ImportBatch.company_id == company_id,
         ImportBatch.entity_type == "employee",
         ImportBatch.source_type == "ODOO",
-    ).all()
+    ).order_by(ImportBatch.created_at.desc(), ImportBatch.id.desc()).all()
     for batch in batches:
         if exclude_batch_id is not None and batch.id == exclude_batch_id:
             continue
@@ -353,16 +531,73 @@ def _odoo_existing_source_references(
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        source_map = metadata.get("odoo_employee_source_map", {})
-        if isinstance(source_map, dict):
-            for employee_id in source_map:
-                if isinstance(employee_id, str):
-                    employee_ids.add(employee_id.strip().casefold())
-        for reference in metadata.get("odoo_source_references", []):
-            if isinstance(reference, str):
-                suffix = reference.rsplit(":", 1)[-1]
-                employee_ids.add(f"odoo-{suffix}".casefold())
-    return employee_ids
+        snapshots = metadata.get("odoo_source_snapshots", {})
+        if not isinstance(snapshots, dict):
+            snapshots = {}
+        imported = metadata.get("odoo_imported_sources", {})
+        if not isinstance(imported, dict):
+            imported = {}
+
+        decisions = metadata.get("source_decisions", {})
+        acknowledged_references = {
+            reference
+            for reference, decision in decisions.items()
+            if isinstance(reference, str)
+            and decision == "keep"
+            and reference in imported
+        } if isinstance(decisions, dict) else set()
+        if (
+            batch.status in {"Completed", "Completed with errors"}
+            and (batch.successful_rows > 0 or acknowledged_references)
+        ):
+            if imported:
+                imported_items = imported.items()
+            else:
+                source_map = metadata.get("odoo_employee_source_map", {})
+                if not isinstance(source_map, dict):
+                    source_map = {}
+                imported_items = (
+                    (reference, {"employee_id": employee_code})
+                    for employee_code, reference in source_map.items()
+                    if isinstance(reference, str)
+                )
+            for reference, item in imported_items:
+                if not isinstance(reference, str) or reference in imported_sources:
+                    continue
+                if not isinstance(item, dict):
+                    item = {}
+                employee = None
+                employee_pk = item.get("employee_pk")
+                if isinstance(employee_pk, int):
+                    employee = employees_by_id.get(employee_pk)
+                employee_code = item.get("employee_id")
+                if employee is None and isinstance(employee_code, str):
+                    employee = employees_by_code.get(employee_code.strip().casefold())
+                snapshot = item.get("source_snapshot")
+                if not isinstance(snapshot, dict):
+                    snapshot = snapshots.get(reference)
+                imported_sources[reference] = {
+                    "employee": employee,
+                    "source_snapshot": (
+                        snapshot if isinstance(snapshot, dict) else None
+                    ),
+                }
+            continue
+
+        if batch.successful_rows == 0 and batch.status in {
+            "Awaiting preview",
+            "Awaiting confirmation",
+            "Needs review",
+        }:
+            references = metadata.get("odoo_source_references", [])
+            if not isinstance(references, list):
+                references = []
+            pending_references.update(
+                reference
+                for reference in references
+                if isinstance(reference, str)
+            )
+    return imported_sources, pending_references
 
 
 def _apply_odoo_source_conflicts(
@@ -370,38 +605,116 @@ def _apply_odoo_source_conflicts(
     company_id: int,
     batch: ImportBatch,
     preview: dict[str, Any],
+    source_rows: list[dict[str, Any]],
+    source_snapshots: dict[str, dict[str, Any]],
+    source_decisions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    existing = _odoo_existing_source_references(
+    imported_sources, pending_references = _odoo_source_history(
         db,
         company_id,
         exclude_batch_id=batch.id,
     )
-    fallback_warnings: list[dict[str, Any]] = []
+    source_decisions = source_decisions or {}
+    skipped_rows = 0
 
     for row in preview["rows"]:
         data = row["data"]
-        employee_id = data.get("employee_id")
-        source_key = (
-            str(employee_id).strip().casefold()
-            if employee_id is not None
-            else ""
+        source_index = row["row_number"] - 2
+        source_row = (
+            source_rows[source_index]
+            if 0 <= source_index < len(source_rows)
+            else {}
         )
-        if source_key and source_key in existing:
+        reference = source_row.get("_odoo_source_reference")
+        reference = reference if isinstance(reference, str) else None
+        row["source_reference"] = reference
+        row["source_status"] = "new"
+        row["source_changes"] = []
+        row["existing_employee"] = None
+
+        imported = imported_sources.get(reference) if reference else None
+        decision = source_decisions.get(reference) if reference else None
+        if imported is not None:
+            employee = imported["employee"]
+            baseline = imported["source_snapshot"]
+            current_snapshot = source_snapshots.get(reference or "")
+            changes = []
+            if isinstance(baseline, dict) and isinstance(current_snapshot, dict):
+                for field in sorted(set(baseline) | set(current_snapshot)):
+                    if baseline.get(field) != current_snapshot.get(field):
+                        changes.append({
+                            "field": field,
+                            "previous_value": baseline.get(field),
+                            "current_value": current_snapshot.get(field),
+                        })
+            if employee is not None:
+                row["existing_employee"] = {
+                    field: getattr(employee, field)
+                    for field in EMPLOYEE_FIELDS
+                    if hasattr(employee, field)
+                }
+            if changes:
+                row["source_status"] = "changed"
+                row["source_changes"] = changes
+                if decision == "keep":
+                    row["importable"] = False
+                    skipped_rows += 1
+                    row["warnings"].append({
+                        "row_number": row["row_number"],
+                        "field": "_odoo_source_reference",
+                        "type": "odoo_source_change_ignored",
+                        "message": "The existing application employee was left unchanged.",
+                    })
+                elif decision != "update" or employee is None:
+                    error = {
+                        "row_number": row["row_number"],
+                        "field": "_odoo_source_reference",
+                        "type": "odoo_source_change_requires_review",
+                        "message": (
+                            "Odoo has newer employee data. Choose whether to "
+                            "update the existing application employee or leave it unchanged."
+                        ),
+                        "raw_value": reference,
+                    }
+                    row["errors"].append(error)
+                    preview["errors"].append(error)
+                    row["importable"] = False
+            else:
+                row["source_status"] = "previously_imported"
+                row["importable"] = False
+                skipped_rows += 1
+                row["warnings"].append({
+                    "row_number": row["row_number"],
+                    "field": "_odoo_source_reference",
+                    "type": "odoo_source_already_imported",
+                    "message": (
+                        "This Odoo employee was already imported and has no "
+                        "new source changes."
+                    ),
+                })
+        elif reference and reference in pending_references:
+            row["source_status"] = "duplicate"
             error = {
                 "row_number": row["row_number"],
                 "field": "_odoo_source_reference",
-                "type": "duplicate_odoo_source_reference",
+                "type": "odoo_source_already_staged",
                 "message": (
-                    "This Odoo employee source reference was already used "
-                    "by a previous import batch."
+                    "This Odoo employee already has an unresolved import batch "
+                    "in this company."
                 ),
-                "raw_value": employee_id,
+                "raw_value": reference,
             }
             row["errors"].append(error)
             preview["errors"].append(error)
             row["importable"] = False
+            skipped_rows += 1
+        elif any(
+            error.get("type") in {"duplicate_in_file", "duplicate_in_database"}
+            for error in row["errors"]
+        ):
+            row["source_status"] = "duplicate"
 
-        if data.get("_odoo_employee_id_generated") is True:
+        if source_row.get("_odoo_employee_id_generated") is True:
             warning = {
                 "row_number": row["row_number"],
                 "field": "employee_id",
@@ -412,17 +725,18 @@ def _apply_odoo_source_conflicts(
                 ),
             }
             row["warnings"].append(warning)
-            fallback_warnings.append(warning)
+            preview["warnings"].append(warning)
 
-    preview["warnings"].extend(fallback_warnings)
     preview["valid_rows"] = [
         {"row_number": row["row_number"], "data": row["data"]}
         for row in preview["rows"]
-        if not row["errors"]
+        if not row["errors"] and row["importable"]
     ]
     preview["summary"]["importable_rows"] = len(preview["valid_rows"])
-    preview["summary"]["invalid_rows"] = (
-        len(preview["rows"]) - len(preview["valid_rows"])
+    preview["summary"]["skipped_rows"] = skipped_rows
+    preview["summary"]["invalid_rows"] = max(
+        0,
+        len(preview["rows"]) - len(preview["valid_rows"]) - skipped_rows,
     )
     preview["summary"]["total_errors"] = len(preview["errors"])
     preview["summary"]["total_warnings"] = len(preview["warnings"])
@@ -433,6 +747,13 @@ def _apply_odoo_source_conflicts(
             for error in preview["errors"]
         )
     )
+    preview["source_status_counts"] = {
+        status: sum(
+            row["source_status"] == status
+            for row in preview["rows"]
+        )
+        for status in ("new", "previously_imported", "changed", "duplicate")
+    }
     return preview
 
 
@@ -454,8 +775,6 @@ def odoo_status(
             "api_key_configured": False,
         }
     status = config.safe_status()
-    status["api_key_configured"] = bool(config.api_key)
-    status["api_key"] = None
     return status
 
 
@@ -537,9 +856,16 @@ def fetch_odoo_preview(
                 raise ValueError(
                     "The mapping contains Odoo columns not in the fetched data."
                 )
-            mapping = request.column_mapping
+            mapping = _odoo_mapping(
+                request.column_mapping,
+                columns,
+            )
         else:
-            mapping = suggested_mapping
+            mapping = _odoo_mapping(
+                suggested_mapping,
+                columns,
+                reject_metadata_mapping=False,
+            )
 
         preview = build_employee_import_preview(
             db,
@@ -569,6 +895,8 @@ def fetch_odoo_preview(
     db.add(batch)
     db.flush()
 
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    source_snapshots = _odoo_snapshots_by_reference(rows)
     metadata = {
         "company_id": effective_company_id,
         "batch_id": batch.id,
@@ -578,6 +906,12 @@ def fetch_odoo_preview(
         "odoo_base_url": config.base_url,
         "odoo_company_id": request.odoo_company_id,
         "odoo_version": None,
+        "retrieved_at": retrieved_at,
+        "odoo_fetch_options": {
+            "include_archived": request.include_archived,
+            "odoo_company_id": request.odoo_company_id,
+            "employee_ids": request.employee_ids,
+        },
         "column_mapping_fields": mapping,
         "column_mapping": _structured_mapping(mapping),
         "combined_fields": _combined_name_fields(mapping),
@@ -585,6 +919,9 @@ def fetch_odoo_preview(
         "odoo_source_references": [
             row["_odoo_source_reference"] for row in rows
         ],
+        "odoo_source_snapshots": source_snapshots,
+        "odoo_imported_sources": {},
+        "source_decisions": {},
         "odoo_employee_source_map": {
             str(row["employee_id"]).strip(): row["_odoo_source_reference"]
             for row in rows
@@ -623,6 +960,8 @@ def fetch_odoo_preview(
         effective_company_id,
         batch,
         preview,
+        rows,
+        source_snapshots,
     )
     metadata["column_mapping_fields"] = preview["column_mapping"]
     metadata["column_mapping"] = _structured_mapping(
@@ -666,6 +1005,8 @@ def fetch_odoo_preview(
         "odoo_version": metadata["odoo_version"],
         "odoo_company_count": None,
         "total_fetched": fetched["total"],
+        "source_status_counts": preview.get("source_status_counts", {}),
+        "retrieved_at": retrieved_at,
         "columns": columns,
         "column_mapping": mapping,
         "available_fields": AVAILABLE_MAPPING_FIELDS,
@@ -910,6 +1251,7 @@ def preview_employee_import(
     context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
+    _require_training_manager(context)
     effective_company_id = context.company_id
     if company_id is not None and company_id != effective_company_id:
         raise HTTPException(
@@ -933,12 +1275,32 @@ def preview_employee_import(
             batch,
             effective_company_id,
         )
+        mapping = request.column_mapping or metadata.get("column_mapping_fields")
+        if batch.source_type == "ODOO" and mapping is not None:
+            mapping = _odoo_mapping(
+                mapping,
+                file_data["columns"],
+                reject_metadata_mapping=request.column_mapping is not None,
+            )
+        decisions = _odoo_source_decisions(metadata)
+        overrides = _row_overrides(metadata)
         preview = build_employee_import_preview(
             db,
             effective_company_id,
             file_data["columns"],
             file_data["rows"],
-            request.column_mapping,
+            mapping,
+            row_overrides=overrides,
+            exclude_employee_ids=(
+                _odoo_update_employee_ids(
+                    db,
+                    effective_company_id,
+                    file_data["rows"],
+                    decisions,
+                )
+                if batch.source_type == "ODOO"
+                else None
+            ),
         )
         if batch.source_type == "ODOO":
             preview = _apply_odoo_source_conflicts(
@@ -946,6 +1308,9 @@ def preview_employee_import(
                 effective_company_id,
                 batch,
                 preview,
+                file_data["rows"],
+                metadata.get("odoo_source_snapshots", {}),
+                decisions,
             )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -982,7 +1347,179 @@ def preview_employee_import(
         "file_name": batch.file_name,
         "source_type": batch.source_type,
         "worksheet": file_data["worksheet"],
+        "retrieved_at": metadata.get("retrieved_at"),
+        "row_edits": metadata.get("row_edits", {}),
+        "source_decisions": _odoo_source_decisions(metadata),
         **preview,
+    })
+
+
+@router.patch("/{batch_id}/rows")
+def review_odoo_import_rows(
+    batch_id: int,
+    request: ImportRowReviewRequest,
+    company_id: int | None = Query(default=None, gt=0),
+    context: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+):
+    _require_training_manager(context)
+    effective_company_id = context.company_id
+    if company_id is not None and company_id != effective_company_id:
+        raise HTTPException(
+            status_code=403,
+            detail="The selected company is not an active membership.",
+        )
+    batch = _get_company_batch(db, batch_id, effective_company_id)
+    if batch.source_type != "ODOO" or batch.status not in {
+        "Awaiting preview",
+        "Awaiting confirmation",
+        "Needs review",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="Only an unresolved Odoo employee batch can be edited.",
+        )
+    if not request.rows:
+        raise HTTPException(status_code=422, detail="At least one row is required.")
+
+    try:
+        metadata, file_data, metadata_path = _read_batch_metadata(
+            batch,
+            effective_company_id,
+        )
+        mapping = _odoo_mapping(
+            metadata.get("column_mapping_fields", {}),
+            file_data["columns"],
+            reject_metadata_mapping=False,
+        )
+        existing_overrides = _row_overrides(metadata)
+        original_preview = build_employee_import_preview(
+            db,
+            effective_company_id,
+            file_data["columns"],
+            file_data["rows"],
+            mapping,
+        )
+        staged_preview = build_employee_import_preview(
+            db,
+            effective_company_id,
+            file_data["columns"],
+            file_data["rows"],
+            mapping,
+            row_overrides=existing_overrides,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    allowed_fields = EMPLOYEE_FIELDS | {"first_name", "last_name", "manager_name"}
+    original_by_row = {
+        row["row_number"]: row["data"] for row in original_preview["rows"]
+    }
+    staged_by_row = {
+        row["row_number"]: row["data"] for row in staged_preview["rows"]
+    }
+    stored_edits = metadata.setdefault("row_edits", {})
+    decisions = metadata.setdefault("source_decisions", {})
+    if not isinstance(stored_edits, dict):
+        stored_edits = metadata["row_edits"] = {}
+    if not isinstance(decisions, dict):
+        decisions = metadata["source_decisions"] = {}
+    edit_history = metadata.setdefault("edit_history", [])
+    if not isinstance(edit_history, list):
+        edit_history = metadata["edit_history"] = []
+
+    imported_sources, _ = _odoo_source_history(
+        db,
+        effective_company_id,
+        exclude_batch_id=batch.id,
+    )
+    source_snapshots = metadata.get("odoo_source_snapshots", {})
+    if not isinstance(source_snapshots, dict):
+        source_snapshots = {}
+    source_rows_by_number = {
+        index + 2: row for index, row in enumerate(file_data["rows"])
+    }
+    seen_rows: set[int] = set()
+    now = datetime.now(timezone.utc).isoformat()
+
+    for reviewed_row in request.rows:
+        row_number = reviewed_row.row_number
+        if (
+            row_number in seen_rows
+            or row_number not in source_rows_by_number
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid or repeated Odoo row number: {row_number}.",
+            )
+        seen_rows.add(row_number)
+        if not reviewed_row.values and reviewed_row.source_decision is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Row {row_number} contains no edits or source decision.",
+            )
+        unsupported_fields = set(reviewed_row.values) - allowed_fields
+        if unsupported_fields:
+            raise HTTPException(
+                status_code=422,
+                detail="Only supported employee fields may be edited.",
+            )
+
+        source_row = source_rows_by_number[row_number]
+        reference = source_row.get("_odoo_source_reference")
+        if reviewed_row.source_decision is not None:
+            imported = (
+                imported_sources.get(reference)
+                if isinstance(reference, str)
+                else None
+            )
+            current_snapshot = (
+                source_snapshots.get(reference)
+                if isinstance(reference, str)
+                else None
+            )
+            if (
+                imported is None
+                or imported.get("employee") is None
+                or not isinstance(imported.get("source_snapshot"), dict)
+                or not isinstance(current_snapshot, dict)
+                or imported["source_snapshot"] == current_snapshot
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "A source decision is available only for an employee "
+                        "with a previously imported, changed Odoo record."
+                    ),
+                )
+            decisions[reference] = reviewed_row.source_decision
+
+        overrides = stored_edits.setdefault(str(row_number), {})
+        if not isinstance(overrides, dict):
+            overrides = stored_edits[str(row_number)] = {}
+        previous_data = staged_by_row.get(row_number, {})
+        original_data = original_by_row.get(row_number, {})
+        for field, value in reviewed_row.values.items():
+            edit_history.append({
+                "row_number": row_number,
+                "field": field,
+                "original_source_value": original_data.get(field),
+                "previous_staged_value": previous_data.get(field),
+                "new_value": value,
+                "edited_by_user_id": context.user.user_id,
+                "edited_at": now,
+            })
+            overrides[field] = value
+
+    _write_batch_metadata(metadata_path, metadata)
+    batch.status = "Needs review"
+    db.commit()
+    return json_safe({
+        "batch_id": batch.id,
+        "status": batch.status,
+        "edited_rows": sorted(seen_rows),
+        "row_edits": metadata["row_edits"],
+        "source_decisions": _odoo_source_decisions(metadata),
     })
 
 
@@ -994,6 +1531,7 @@ def confirm_employee_import(
     context: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
 ):
+    _require_training_manager(context)
     effective_company_id = context.company_id
     if company_id is not None and company_id != effective_company_id:
         raise HTTPException(
@@ -1029,12 +1567,39 @@ def confirm_employee_import(
                 detail="Generate a preview before confirming this import.",
             )
 
+        decisions = _odoo_source_decisions(metadata)
+        overrides = _row_overrides(metadata)
+        mapping = metadata.get("column_mapping_fields")
+        if batch.source_type == "ODOO":
+            config = OdooConfig.from_env()
+            _assert_odoo_source_is_current(
+                config,
+                metadata,
+                file_data["rows"],
+            )
+            mapping = _odoo_mapping(
+                mapping or {},
+                file_data["columns"],
+                reject_metadata_mapping=False,
+            )
+        excluded_employee_ids = (
+            _odoo_update_employee_ids(
+                db,
+                effective_company_id,
+                file_data["rows"],
+                decisions,
+            )
+            if batch.source_type == "ODOO"
+            else None
+        )
         preview = build_employee_import_preview(
             db,
             effective_company_id,
             file_data["columns"],
             file_data["rows"],
-            metadata.get("column_mapping_fields"),
+            mapping,
+            row_overrides=overrides,
+            exclude_employee_ids=excluded_employee_ids,
         )
         if batch.source_type == "ODOO":
             preview = _apply_odoo_source_conflicts(
@@ -1042,6 +1607,9 @@ def confirm_employee_import(
                 effective_company_id,
                 batch,
                 preview,
+                file_data["rows"],
+                metadata.get("odoo_source_snapshots", {}),
+                decisions,
             )
         if not preview["summary"]["ready_for_confirmation"]:
             raise HTTPException(
@@ -1056,14 +1624,43 @@ def confirm_employee_import(
                 },
             )
 
-        employees_to_insert = [
-            Employee(
-                **employee_model_values(row["data"]),
-                company_id=effective_company_id,
-            )
-            for row in preview["valid_rows"]
-        ]
+        imported_sources, _ = _odoo_source_history(
+            db,
+            effective_company_id,
+            exclude_batch_id=batch.id,
+        ) if batch.source_type == "ODOO" else ({}, set())
+        source_rows_by_number = {
+            index + 2: row for index, row in enumerate(file_data["rows"])
+        }
+        employees_to_insert = []
+        employees_to_update: list[tuple[Employee, dict[str, Any]]] = []
+        for row in preview["valid_rows"]:
+            source_row = source_rows_by_number.get(row["row_number"], {})
+            reference = source_row.get("_odoo_source_reference")
+            if (
+                batch.source_type == "ODOO"
+                and isinstance(reference, str)
+                and decisions.get(reference) == "update"
+            ):
+                imported = imported_sources.get(reference)
+                employee = imported.get("employee") if imported else None
+                if employee is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="The previously imported employee is no longer available.",
+                    )
+                employees_to_update.append((employee, row["data"]))
+            else:
+                employees_to_insert.append(
+                    Employee(
+                        **employee_model_values(row["data"]),
+                        company_id=effective_company_id,
+                    )
+                )
         db.add_all(employees_to_insert)
+        for employee, data in employees_to_update:
+            for field, value in employee_model_values(data).items():
+                setattr(employee, field, value)
         db.flush()
 
         company_employees = db.query(Employee).filter(
@@ -1088,6 +1685,75 @@ def confirm_employee_import(
                     ),
                 )
             employee.manager_internal_id = manager.id
+        for employee, _ in employees_to_update:
+            manager_code = (employee.manager_id or "").strip().casefold()
+            if not manager_code:
+                employee.manager_internal_id = None
+                continue
+            manager = employees_by_code.get(manager_code)
+            if manager is None or manager.id == employee.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "A manager relationship changed after preview; "
+                        "preview the batch again."
+                    ),
+                )
+            employee.manager_internal_id = manager.id
+
+        if batch.source_type == "ODOO":
+            imported_metadata = metadata.setdefault("odoo_imported_sources", {})
+            if not isinstance(imported_metadata, dict):
+                imported_metadata = metadata["odoo_imported_sources"] = {}
+            for row in preview["valid_rows"]:
+                source_row = source_rows_by_number.get(row["row_number"], {})
+                reference = source_row.get("_odoo_source_reference")
+                if not isinstance(reference, str):
+                    continue
+                employee = next(
+                    (
+                        updated_employee
+                        for updated_employee, _ in employees_to_update
+                        if updated_employee is imported_sources.get(reference, {}).get("employee")
+                    ),
+                    None,
+                )
+                if employee is None:
+                    employee = next(
+                        (
+                            inserted_employee
+                            for inserted_employee in employees_to_insert
+                            if inserted_employee.employee_id
+                            == employee_model_values(row["data"]).get("employee_id")
+                        ),
+                        None,
+                    )
+                if employee is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="The employee import could not be linked to its Odoo source.",
+                    )
+                imported_metadata[reference] = {
+                    "employee_pk": employee.id,
+                    "employee_id": employee.employee_id,
+                    "source_snapshot": metadata.get(
+                        "odoo_source_snapshots", {}
+                    ).get(reference),
+                }
+            for reference, decision in decisions.items():
+                if decision != "keep":
+                    continue
+                imported = imported_sources.get(reference)
+                employee = imported.get("employee") if imported else None
+                if employee is None:
+                    continue
+                imported_metadata[reference] = {
+                    "employee_pk": employee.id,
+                    "employee_id": employee.employee_id,
+                    "source_snapshot": metadata.get(
+                        "odoo_source_snapshots", {}
+                    ).get(reference),
+                }
 
         persisted_issues = list(preview["errors"])
         persisted_issues.extend(
@@ -1099,14 +1765,30 @@ def confirm_employee_import(
         )
         replace_import_issues(db, batch.id, persisted_issues)
 
-        batch.successful_rows = len(employees_to_insert)
-        batch.failed_rows = batch.total_rows - batch.successful_rows
+        batch.successful_rows = (
+            len(employees_to_insert) + len(employees_to_update)
+        )
+        batch.failed_rows = (
+            len({
+                error.get("row_number")
+                for error in preview["errors"]
+                if error.get("row_number") is not None
+            })
+            if batch.source_type == "ODOO"
+            else batch.total_rows - batch.successful_rows
+        )
         batch.status = (
             "Completed with errors"
             if batch.failed_rows
             else "Completed"
         )
         batch.completed_at = datetime.utcnow()
+        if batch.source_type == "ODOO":
+            _, _, metadata_path = _read_batch_metadata(
+                batch,
+                effective_company_id,
+            )
+            _write_batch_metadata(metadata_path, metadata)
         db.commit()
         db.refresh(batch)
 
@@ -1119,6 +1801,8 @@ def confirm_employee_import(
                 "total_rows": batch.total_rows,
                 "successful_rows": batch.successful_rows,
                 "failed_rows": batch.failed_rows,
+                "updated_rows": len(employees_to_update),
+                "skipped_rows": preview["summary"].get("skipped_rows", 0),
                 "total_errors": len(preview["errors"]),
                 "total_warnings": len(preview["warnings"]),
             },
@@ -1137,6 +1821,12 @@ def confirm_employee_import(
                 "before retrying."
             ),
         ) from exc
+    except OdooError as exc:
+        db.rollback()
+        raise _safe_odoo_http_error(exc) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(

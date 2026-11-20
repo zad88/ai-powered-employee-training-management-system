@@ -1,4 +1,4 @@
-﻿import backend.app.db.models
+import backend.app.db.models
 
 from fastapi import Depends, FastAPI
 from backend.app.api.dependencies import authorize_business_request
@@ -10,6 +10,7 @@ from backend.app.api.health import router as health_router
 from backend.app.api.employees import router as employees_router
 from backend.app.api.skills import router as skills_router
 from backend.app.api.job_skills import router as job_skills_router
+from backend.app.api.esco_occupations import router as esco_occupations_router
 from backend.app.api.courses import router as courses_router
 from backend.app.api.course_skills import router as course_skills_router
 from backend.app.api.course_sessions import router as course_sessions_router
@@ -43,6 +44,7 @@ app.include_router(tna_router, dependencies=business_auth)
 app.include_router(employees_router, dependencies=business_auth)
 app.include_router(skills_router, dependencies=business_auth)
 app.include_router(job_skills_router, dependencies=business_auth)
+app.include_router(esco_occupations_router, dependencies=business_auth)
 app.include_router(courses_router, dependencies=business_auth)
 app.include_router(course_skills_router, dependencies=business_auth)
 app.include_router(skill_assessments_router, dependencies=business_auth)

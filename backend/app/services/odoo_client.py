@@ -100,7 +100,6 @@ class OdooConfig:
             "configured": True,
             "base_url": self.base_url,
             "database": self.database,
-            "username": self.username,
             "api_key_configured": bool(self.api_key),
         }
 
@@ -496,8 +495,10 @@ class OdooClient:
         odoo_company_id: int | None = None,
         employee_ids: Iterable[int] | None = None,
         page_size: int = 500,
-        max_records: int = 10_000,
+        max_records: int | None = None,
     ) -> dict[str, Any]:
+        if page_size <= 0 or (max_records is not None and max_records <= 0):
+            raise OdooFetchError("Odoo pagination limits must be positive.")
         adapter = self.select_adapter()
         field_metadata = adapter.fields_get("hr.employee")
         preferred_fields = [
@@ -514,6 +515,8 @@ class OdooClient:
             "barcode",
             "job_title",
             "create_date",
+            "write_date",
+            "contract_date_start",
             "contract_type_id",
             "employee_type",
         ]
@@ -535,7 +538,7 @@ class OdooClient:
             domain.append(["id", "in", selected_ids])
 
         total = adapter.search_count("hr.employee", domain)
-        if total > max_records:
+        if max_records is not None and total > max_records:
             raise OdooFetchError(
                 f"The Odoo selection exceeds the {max_records:,}-record limit."
             )
@@ -544,12 +547,17 @@ class OdooClient:
         offset = 0
         seen_ids: set[int] = set()
         while offset < total:
+            page_limit = (
+                page_size
+                if max_records is None
+                else min(page_size, max_records - offset)
+            )
             page = adapter.search_read(
                 "hr.employee",
                 domain,
                 fields,
                 offset=offset,
-                limit=min(page_size, max_records),
+                limit=page_limit,
             )
             if not page:
                 break
@@ -559,7 +567,7 @@ class OdooClient:
                     seen_ids.add(record_id)
                     records.append(record)
             offset += len(page)
-            if len(page) < min(page_size, max_records):
+            if len(page) < page_limit:
                 break
 
         if len(records) != total:
@@ -620,6 +628,8 @@ def normalize_odoo_employees(
             value = record.get("employee_type")
             employment_type = str(value).strip() if value not in (None, False) else None
 
+        contract_start_date = record.get("contract_date_start")
+
         job_level = record.get("job_level")
         if isinstance(job_level, (list, dict)):
             job_level = _relation_name(job_level)
@@ -645,10 +655,17 @@ def normalize_odoo_employees(
                 employee_id.startswith("ODOO-")
             ),
         }
+        if contract_start_date not in (None, False, ""):
+            columns.append("contract_start_date")
+            row["contract_start_date"] = str(contract_start_date).strip()
         create_date = record.get("create_date")
         if create_date not in (None, False):
             columns.append("odoo_create_date")
             row["odoo_create_date"] = str(create_date).strip()[:10]
+        write_date = record.get("write_date")
+        if write_date not in (None, False):
+            columns.append("odoo_write_date")
+            row["odoo_write_date"] = str(write_date).strip()
         rows.append(row)
 
     mapping = {
@@ -659,12 +676,15 @@ def normalize_odoo_employees(
         "job_title": "job_title",
         "manager_name": "manager_name",
         "employment_status": "employment_status",
-        "hire_date": None,
-        "employment_type": "employment_type" if any(row["employment_type"] for row in rows) else None,
+        "hire_date": "hire_date",
+        "employment_type": "employment_type",
         "job_level": "job_level" if any(row["job_level"] for row in rows) else None,
+        "_odoo_employee_id_generated": None,
         "_odoo_source_reference": None,
-        "_odoo_employee_id_generated": "_odoo_employee_id_generated",
-        "_odoo_source_reference": "_odoo_source_reference",
         "odoo_create_date": None,
     }
+    if "contract_start_date" in columns:
+        mapping["contract_start_date"] = None
+    if "odoo_write_date" in columns:
+        mapping["odoo_write_date"] = None
     return list(dict.fromkeys(columns)), rows, mapping

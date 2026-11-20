@@ -28,6 +28,7 @@ from backend.app.services.file_reader import (
     WorksheetSelectionRequired,
     read_tabular_file,
 )
+from backend.app.services.odoo_client import OdooConfig
 import backend.app.api.employee_imports as employee_imports_module
 
 
@@ -358,6 +359,237 @@ def test_preview_reports_missing_duplicate_and_invalid_manager_records(import_en
             and error["raw_value"] == "SELF"
             for error in reporting_cycle["errors"]
         )
+
+
+def test_odoo_fetch_preview_uses_pipeline_and_confirmation(import_env, monkeypatch):
+    client, test_session = import_env
+    config = OdooConfig(
+        "http://localhost:8069",
+        "odoo_training_test",
+        "integration",
+        "test-key",
+        30,
+    )
+
+    odoo_records = [
+        {
+            "id": 101,
+            "name": "Ahmed Hassan",
+            "work_email": "ahmed.odoo@example.com",
+            "department_id": [10, "Engineering"],
+            "job_id": [20, "Software Engineer"],
+            "parent_id": False,
+            "active": True,
+            "identification_id": "ODOO-EMP-101",
+            "contract_date_start": "2023-01-15",
+            "contract_type_id": [30, "Full-time"],
+            "create_date": "2023-01-15 00:00:00",
+            "write_date": "2023-01-15 00:00:00",
+        },
+    ]
+
+    class FakeOdooClient:
+        def __init__(self, _config):
+            pass
+
+        def fetch_employees(self, **_kwargs):
+            return {
+                "records": list(odoo_records),
+                "total": len(odoo_records),
+            }
+
+    monkeypatch.setattr(
+        employee_imports_module.OdooConfig,
+        "from_env",
+        classmethod(lambda _cls: config),
+    )
+    monkeypatch.setattr(
+        employee_imports_module,
+        "OdooClient",
+        FakeOdooClient,
+    )
+    monkeypatch.setattr(
+        employee_imports_module,
+        "detect_odoo_version",
+        lambda _config: {"server_version": "19.0"},
+    )
+
+    headers = _headers(1)
+    fetched = client.post(
+        "/employee-imports/odoo/fetch-preview",
+        headers=headers,
+        json={},
+    )
+    assert fetched.status_code == 200, fetched.text
+    preview = fetched.json()
+    assert preview["source_type"] == "ODOO"
+    assert preview["total_fetched"] == 1
+    assert "contract_start_date" in preview["columns"]
+    assert preview["summary"]["ready_for_confirmation"] is True
+
+    column_mapping = dict(preview["column_mapping"])
+    column_mapping["hire_date"] = None
+    column_mapping["contract_start_date"] = "hire_date"
+    validated = client.post(
+        f"/employee-imports/{preview['batch_id']}/preview",
+        headers=headers,
+        json={"column_mapping": column_mapping},
+    )
+    assert validated.status_code == 200
+    validated_preview = validated.json()
+    assert validated_preview["rows"][0]["data"]["full_name"] == "Ahmed Hassan"
+    assert validated_preview["rows"][0]["data"]["department"] == "Engineering"
+    assert validated_preview["rows"][0]["data"]["job_title"] == "Software Engineer"
+    assert validated_preview["rows"][0]["data"]["hire_date"] == "2023-01-15"
+    assert validated_preview["summary"]["importable_rows"] == 1
+    assert validated_preview["summary"]["ready_for_confirmation"] is True
+
+    declined = client.post(
+        f"/employee-imports/{validated_preview['batch_id']}/confirm",
+        headers=headers,
+        json={"confirmed": False},
+    )
+    assert declined.status_code == 400
+
+    confirmed = client.post(
+        f"/employee-imports/{validated_preview['batch_id']}/confirm",
+        headers=headers,
+        json={"confirmed": True},
+    )
+    assert confirmed.status_code == 200
+    with test_session() as db:
+        imported = db.query(Employee).filter(
+            Employee.company_id == 1,
+            Employee.employee_id == "ODOO-EMP-101",
+        ).one()
+        assert imported.full_name == "Ahmed Hassan"
+        assert imported.hire_date == date(2023, 1, 15)
+
+    column_mapping["contract_start_date"] = "hire_date"
+    repeated = client.post(
+        "/employee-imports/odoo/fetch-preview",
+        headers=headers,
+        json={"column_mapping": column_mapping},
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["rows"][0]["source_status"] == "previously_imported"
+    assert repeated.json()["summary"]["importable_rows"] == 0
+    closed = client.post(
+        f"/employee-imports/{repeated.json()['batch_id']}/confirm",
+        headers=headers,
+        json={"confirmed": True},
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["summary"]["successful_rows"] == 0
+
+    odoo_records[0]["name"] = "Ahmed Hassan Updated"
+    odoo_records[0]["write_date"] = "2024-04-01 10:00:00"
+    changed = client.post(
+        "/employee-imports/odoo/fetch-preview",
+        headers=headers,
+        json={"column_mapping": column_mapping},
+    )
+    assert changed.status_code == 200, changed.text
+    changed_preview = changed.json()
+    assert changed_preview["rows"][0]["source_status"] == "changed"
+    assert changed_preview["rows"][0]["importable"] is False
+
+    saved = client.patch(
+        f"/employee-imports/{changed_preview['batch_id']}/rows",
+        headers=headers,
+        json={
+            "rows": [{
+                "row_number": 2,
+                "values": {"full_name": "Ahmed Hassan Reviewed"},
+                "source_decision": "update",
+            }],
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    reviewed = client.post(
+        f"/employee-imports/{changed_preview['batch_id']}/preview",
+        headers=headers,
+        json={"column_mapping": column_mapping},
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    reviewed_row = reviewed.json()["rows"][0]
+    assert reviewed_row["data"]["full_name"] == "Ahmed Hassan Reviewed"
+    assert reviewed_row["manually_edited_fields"] == ["full_name"]
+    assert reviewed_row["importable"] is True
+
+    odoo_records[0]["name"] = "A newer Odoo value"
+    odoo_records[0]["write_date"] = "2024-04-02 10:00:00"
+    stale_confirmation = client.post(
+        f"/employee-imports/{changed_preview['batch_id']}/confirm",
+        headers=headers,
+        json={"confirmed": True},
+    )
+    assert stale_confirmation.status_code == 409
+    assert "changed after preview" in stale_confirmation.json()["detail"]
+
+    odoo_records[0]["name"] = "Ahmed Hassan Updated"
+    odoo_records[0]["write_date"] = "2024-04-01 10:00:00"
+    updated = client.post(
+        f"/employee-imports/{changed_preview['batch_id']}/confirm",
+        headers=headers,
+        json={"confirmed": True},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["summary"]["updated_rows"] == 1
+    with test_session() as db:
+        imported = db.query(Employee).filter(
+            Employee.company_id == 1,
+            Employee.employee_id == "ODOO-EMP-101",
+        ).one()
+        assert imported.full_name == "Ahmed Hassan Reviewed"
+    assert odoo_records[0]["name"] == "Ahmed Hassan Updated"
+
+    odoo_records[0]["name"] = "Source change to leave unchanged"
+    odoo_records[0]["write_date"] = "2024-04-03 10:00:00"
+    keep_batch = client.post(
+        "/employee-imports/odoo/fetch-preview",
+        headers=headers,
+        json={"column_mapping": column_mapping},
+    ).json()
+    assert keep_batch["rows"][0]["source_status"] == "changed"
+    kept = client.patch(
+        f"/employee-imports/{keep_batch['batch_id']}/rows",
+        headers=headers,
+        json={
+            "rows": [{
+                "row_number": 2,
+                "source_decision": "keep",
+            }],
+        },
+    )
+    assert kept.status_code == 200, kept.text
+    keep_preview = client.post(
+        f"/employee-imports/{keep_batch['batch_id']}/preview",
+        headers=headers,
+        json={"column_mapping": column_mapping},
+    )
+    assert keep_preview.status_code == 200, keep_preview.text
+    assert keep_preview.json()["summary"]["skipped_rows"] == 1
+    keep_confirmation = client.post(
+        f"/employee-imports/{keep_batch['batch_id']}/confirm",
+        headers=headers,
+        json={"confirmed": True},
+    )
+    assert keep_confirmation.status_code == 200, keep_confirmation.text
+    with test_session() as db:
+        imported = db.query(Employee).filter(
+            Employee.company_id == 1,
+            Employee.employee_id == "ODOO-EMP-101",
+        ).one()
+        assert imported.full_name == "Ahmed Hassan Reviewed"
+
+    acknowledged = client.post(
+        "/employee-imports/odoo/fetch-preview",
+        headers=headers,
+        json={"column_mapping": column_mapping},
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["rows"][0]["source_status"] == "previously_imported"
 
 
 def test_training_manager_preview_requires_confirmation_before_writes(import_env):

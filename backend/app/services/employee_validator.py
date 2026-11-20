@@ -100,6 +100,7 @@ def validate_employee_rows(
     suggestions: dict,
     combined_fields: list | None = None,
     approved_defaults: dict | None = None,
+    row_overrides: dict[int, dict[str, Any]] | None = None,
 ) -> dict:
     """
     Validate and standardize employee rows without database writes.
@@ -115,12 +116,20 @@ def validate_employee_rows(
     combined_field_names = {
         item.get("field") for item in combined_fields
     }
+    row_overrides = row_overrides or {}
+    overridden_fields = {
+        field
+        for overrides in row_overrides.values()
+        for field, value in overrides.items()
+        if value not in (None, "")
+    }
 
     missing_mappings = [
         field for field in REQUIRED_FIELDS
         if field not in field_mapping
         and field not in combined_field_names
         and field not in approved_defaults
+        and field not in overridden_fields
     ]
 
     errors = []
@@ -190,6 +199,8 @@ def validate_employee_rows(
                         f"was applied to '{field}'."
                     ),
                 })
+
+        employee.update(row_overrides.get(row_number, {}))
 
         # Standardize surrounding whitespace.
         for field, value in list(employee.items()):

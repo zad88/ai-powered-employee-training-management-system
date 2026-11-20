@@ -34,3 +34,6 @@ backend/data/imports/
 *_before_*.py
 backend/backups/
 /backups/*.dump
+
+# Local PostgreSQL backup - do not upload
+/training_management_before_esco.dump

@@ -34,8 +34,6 @@ AVAILABLE_MAPPING_FIELDS = sorted(
         "first_name",
         "last_name",
         "manager_name",
-        "_odoo_source_reference",
-        "_odoo_employee_id_generated",
     }
 )
 STRING_FIELD_LIMITS = {
@@ -453,6 +451,9 @@ def build_employee_import_preview(
     columns: list[str],
     rows: list[dict[str, Any]],
     column_mapping: dict[str, str | None] | None = None,
+    *,
+    row_overrides: dict[int, dict[str, Any]] | None = None,
+    exclude_employee_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     suggestions, combined_fields, normalized_mapping = _validation_mapping(
         columns,
@@ -463,6 +464,7 @@ def build_employee_import_preview(
         suggestions=suggestions,
         combined_fields=combined_fields,
         approved_defaults=APPROVED_DEFAULTS,
+        row_overrides=row_overrides,
     )
 
     row_items = validation["rows"]
@@ -474,13 +476,18 @@ def build_employee_import_preview(
     existing_employees = db.query(Employee).filter(
         Employee.company_id == company_id,
     ).all()
+    duplicate_checked_employees = [
+        employee
+        for employee in existing_employees
+        if employee.id not in (exclude_employee_ids or set())
+    ]
     existing_ids = {
         _casefold(employee.employee_id)
-        for employee in existing_employees
+        for employee in duplicate_checked_employees
     }
     existing_emails = {
         _casefold(employee.email)
-        for employee in existing_employees
+        for employee in duplicate_checked_employees
     }
     for row in row_items:
         data = row["data"]
@@ -534,6 +541,9 @@ def build_employee_import_preview(
                 "data": row["data"],
                 "errors": row["errors"],
                 "warnings": row["warnings"],
+                "manually_edited_fields": sorted(
+                    (row_overrides or {}).get(row["row_number"], {})
+                ),
                 "importable": not row["errors"],
             }
             for row in row_items

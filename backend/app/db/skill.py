@@ -1,5 +1,7 @@
 
-from sqlalchemy import String, Text
+from datetime import datetime
+
+from sqlalchemy import DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.db.base import Base
@@ -40,6 +42,31 @@ class Skill(Base):
     alternative_labels: Mapped[str | None] = mapped_column(
         Text,
         nullable=True
+    )
+
+    esco_skill_type: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True
+    )
+
+    esco_reuse_level: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True
+    )
+
+    esco_status: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True
+    )
+
+    esco_modified_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    esco_occupation_relations = relationship(
+        "ESCOOccupationSkill",
+        back_populates="skill"
     )
 
     job_requirements = relationship(
