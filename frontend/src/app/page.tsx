@@ -64,6 +64,9 @@ const stages = [
 
 export default function Dashboard() {
   const { activeMembership } = useAuth();
+  if (activeMembership && activeMembership.role !== "Training Manager") {
+    return <RoleDashboard role={activeMembership.role} />;
+  }
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -167,6 +170,16 @@ export default function Dashboard() {
           </div>
 
           <section className="module-grid">
+            <Link href="/users" className="module-card available-module">
+              <div className="module-card-top">
+                <span className="module-icon">♙</span>
+                <span className="module-status available-status">Available</span>
+              </div>
+              <div className="module-stage">ADMINISTRATION</div>
+              <h3>User Management</h3>
+              <p>Manage company accounts and invitations.</p>
+              <div className="module-link">Open module →</div>
+            </Link>
             <a href="/imports" className="module-card available-module">
               <div className="module-card-top">
                 <span className="module-icon">▤</span>
@@ -240,6 +253,58 @@ export default function Dashboard() {
             TalentFlow <span>·</span> AI-Powered Employee Training Management System
           </footer>
         </div>
+      </section>
+    </main>
+  );
+}
+
+const roleModules: Record<string, { title: string; description: string; href?: string }[]> = {
+  Director: [
+    { title: "Organizational overview", description: "Review company training needs.", href: "/tna" },
+    { title: "Pending approvals", description: "Review job requirements and assessments.", href: "/job-requirements" },
+    { title: "Department training progress", description: "A dedicated progress dashboard is not available yet." },
+    { title: "Training reports", description: "A dedicated reporting page is not available yet." },
+  ],
+  Manager: [
+    { title: "Team overview", description: "View your direct reports.", href: "/employees" },
+    { title: "Team skills", description: "Review team skills and evidence.", href: "/employee-skills" },
+    { title: "Team training needs", description: "Review your team's training needs.", href: "/tna" },
+    { title: "Team training progress", description: "A dedicated progress dashboard is not available yet." },
+    { title: "Manager actions", description: "Review team assessments.", href: "/assessments" },
+  ],
+  Employee: [
+    { title: "My profile", description: "View your employee profile.", href: "/employees" },
+    { title: "My skills", description: "Review your skills and requirements.", href: "/employee-skills" },
+    { title: "My assessments", description: "View and submit assessments.", href: "/assessments" },
+    { title: "My assigned training", description: "A dedicated training page is not available yet." },
+    { title: "My progress and feedback", description: "A dedicated progress page is not available yet." },
+  ],
+};
+
+function RoleDashboard({ role }: { role: string }) {
+  return (
+    <main className="content dashboard-content">
+      <div className="page-heading">
+        <div>
+          <div className="eyebrow">MY WORKSPACE</div>
+          <h1>{role} Dashboard</h1>
+          <p>Access the information available to your role.</p>
+        </div>
+      </div>
+      <section className="module-grid">
+        {(roleModules[role] ?? []).map((module) => (
+          module.href ? (
+            <Link href={module.href} className="module-card available-module" key={module.title}>
+              <span className="module-status available-status">Available</span>
+              <h2>{module.title}</h2><p>{module.description}</p>
+            </Link>
+          ) : (
+            <article className="module-card" key={module.title}>
+              <span className="module-status">Not available yet</span>
+              <h2>{module.title}</h2><p>{module.description}</p>
+            </article>
+          )
+        ))}
       </section>
     </main>
   );

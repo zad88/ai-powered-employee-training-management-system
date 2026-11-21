@@ -11,8 +11,10 @@ const navigation: Record<string, NavItem[]> = {
   "Training Manager": [
     { href: "/", label: "Overview" },
     { href: "/imports", label: "Employee Imports" },
+    { href: "/users", label: "User Management" },
     { href: "/employees", label: "Employees" },
     { href: "/skills", label: "Skills Catalogue" },
+    { href: "/esco-occupations", label: "ESCO Occupations" },
     { href: "/assessments", label: "Assessments" },
     { href: "/job-requirements", label: "Job Requirements" },
     { href: "/tna", label: "Training Needs" },
@@ -42,7 +44,7 @@ const navigation: Record<string, NavItem[]> = {
 
 export function WorkspaceSidebar() {
   const pathname = usePathname();
-  const { user, activeMembership, selectCompany, signOut } = useAuth();
+  const { user, activeMembership, signOut } = useAuth();
   const [logoutError, setLogoutError] = useState("");
   const role = activeMembership?.role ?? "Employee";
   const items = navigation[role] ?? [];
@@ -66,21 +68,6 @@ export function WorkspaceSidebar() {
           <span>{item.label}</span>
         </Link>
       ))}
-      {user && user.memberships.filter((membership) => membership.is_active).length > 1 && (
-        <label className="company-switcher">
-          Company
-          <select
-            value={activeMembership?.company_id ?? ""}
-            onChange={(event) => selectCompany(Number(event.target.value))}
-          >
-            {user.memberships.filter((membership) => membership.is_active).map((membership) => (
-              <option key={membership.membership_id} value={membership.company_id}>
-                Company {membership.company_id}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
       <div className="sidebar-bottom">
         <div className="user-avatar">
           {user?.full_name.split(/\s+/).slice(0, 2).map((name) => name[0]).join("")}

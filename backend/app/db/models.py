@@ -5,6 +5,7 @@ from backend.app.db.skill import Skill
 from backend.app.db.esco_occupation import ESCOOccupation
 from backend.app.db.esco_skill_hierarchy_node import ESCOSkillHierarchyNode
 from backend.app.db.esco_occupation_skill import ESCOOccupationSkill
+from backend.app.db.company_esco_occupation_mapping import CompanyESCOOccupationMapping
 from backend.app.db.job_skill import JobSkill
 from backend.app.db.skill_assessment import SkillAssessment
 from backend.app.db.course import Course
@@ -25,4 +26,5 @@ from backend.app.db.historical_training_record import HistoricalTrainingRecord
 from backend.app.db.import_issue_correction import ImportIssueCorrection
 
 from backend.app.db.auth_models import User, UserCompanyRole
+from backend.app.db.user_invitation import UserInvitation, UserManagementAudit
 from backend.app.db.revoked_access_token import RevokedAccessToken

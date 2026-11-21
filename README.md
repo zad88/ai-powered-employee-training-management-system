@@ -16,11 +16,15 @@ not configured.
 
 ## Database and manager-link setup
 
-After backing up the production database, review the pending Alembic migration
-and apply it during a controlled deployment with
-`python -m alembic upgrade head`. The pending migrations add nullable user
-audit references and access-token revocation storage; they do not reset
-existing business data.
+After backing up the database, review pending Alembic migrations and apply them
+during a controlled deployment with `python -m alembic upgrade head`. Migration
+`82b71d3a9e40` requires exactly one membership per existing user, no duplicate
+employee links, and unique emails after trimming and case normalization. It
+stops rather than altering conflicting records. Review and resolve conflicts
+manually before deployment. The new authentication code requires this migration;
+do not deploy it against an older schema. Its downgrade removes invitation,
+audit and authentication-version data and can affect active sessions; back up
+and review the downgrade before using it.
 
 Manager relationships are company-local and use `manager_internal_id`. Run
 `python -m backend.scripts.reconcile_manager_links` to preview existing link
@@ -34,6 +38,25 @@ are rejected and users must sign in again. Revocation records are retained only
 until their token expiry. Schedule
 `python -m backend.scripts.cleanup_expired_token_revocations` to run daily so
 expired records are removed without affecting active sessions.
+
+## User invitations
+
+Training Managers can invite users from User Management. Each account belongs to
+one company. Linking an existing, same-company employee is optional and does not
+create an employee. Employee-specific features require an appropriate employee
+link. Reporting managers must be active linked accounts with a Manager, Training
+Manager, or Director role.
+
+Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_SECURITY` (`starttls` or
+`ssl`) and `INVITATION_BASE_URL` in the backend environment. Set `SMTP_USERNAME`
+and `SMTP_PASSWORD` together if the mail server requires authentication.
+Restart the backend after changing its environment. SMTP failures are logged by
+stage without credentials, addresses, tokens, or the mail server's raw response.
+The invitation base must be an HTTPS origin except for loopback development.
+Keep credentials out of source control. Links expire after 72 hours, are
+single-use, and can be revoked or rotated by resending. SMTP acceptance does not
+guarantee delivery; if the database transaction fails after SMTP accepts a
+message, that link will not work and a new invitation must be sent.
 
 ## Employee imports
 

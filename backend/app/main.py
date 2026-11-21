@@ -11,6 +11,11 @@ from backend.app.api.employees import router as employees_router
 from backend.app.api.skills import router as skills_router
 from backend.app.api.job_skills import router as job_skills_router
 from backend.app.api.esco_occupations import router as esco_occupations_router
+from backend.app.api.company_esco_mappings import router as company_esco_mappings_router
+from backend.app.api.user_management import (
+    router as user_management_router,
+    public_router as invitation_router,
+)
 from backend.app.api.courses import router as courses_router
 from backend.app.api.course_skills import router as course_skills_router
 from backend.app.api.course_sessions import router as course_sessions_router
@@ -39,12 +44,15 @@ def home():
 
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(invitation_router)
 business_auth = [Depends(authorize_business_request)]
 app.include_router(tna_router, dependencies=business_auth)
 app.include_router(employees_router, dependencies=business_auth)
 app.include_router(skills_router, dependencies=business_auth)
 app.include_router(job_skills_router, dependencies=business_auth)
 app.include_router(esco_occupations_router, dependencies=business_auth)
+app.include_router(company_esco_mappings_router, dependencies=business_auth)
+app.include_router(user_management_router, dependencies=business_auth)
 app.include_router(courses_router, dependencies=business_auth)
 app.include_router(course_skills_router, dependencies=business_auth)
 app.include_router(skill_assessments_router, dependencies=business_auth)

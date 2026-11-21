@@ -4,6 +4,7 @@ export function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   if (
     pathname === "/login" ||
+    pathname === "/accept-invitation" ||
     pathname.startsWith("/api/") ||
     pathname.startsWith("/_next/") ||
     pathname === "/favicon.ico"

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { authenticatedFetch } from "../../lib/api";
 import { useAuth } from "../../components/auth-provider";
+import { EscoJobSkillReview } from "../../components/esco-job-skill-review";
 
 type Skill = {
   skill_id: number;
@@ -70,6 +71,11 @@ async function apiRequest<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export default function JobRequirementsPage() {
+  const { activeMembership } = useAuth();
+  return <JobRequirementsContent key={activeMembership?.company_id ?? "none"} />;
+}
+
+function JobRequirementsContent() {
   const { activeMembership } = useAuth();
   const canEdit = activeMembership?.role === "Training Manager";
   const canApprove = canEdit || activeMembership?.role === "Director";
@@ -332,6 +338,16 @@ export default function JobRequirementsPage() {
           <strong>{approvedCount}</strong>
         </div>
       </section>
+
+      {canEdit && activeMembership && (
+        <EscoJobSkillReview
+          key={activeMembership.company_id}
+          requirements={requirements.filter(
+            (requirement) => requirement.company_id === activeMembership.company_id
+          )}
+          onCreated={() => void loadData()}
+        />
+      )}
 
       {canEdit && <section className="job-skills-panel">
         <div className="job-skills-section-heading">

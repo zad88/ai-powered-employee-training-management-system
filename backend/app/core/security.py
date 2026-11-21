@@ -28,7 +28,7 @@ def verify_password(password: str, hashed_password: str) -> bool:
     return password_hash.verify(password, hashed_password)
 
 
-def create_access_token(user_id: int) -> str:
+def create_access_token(user_id: int, auth_version: int = 0) -> str:
     expires = datetime.now(timezone.utc) + timedelta(
         minutes=ACCESS_TOKEN_EXPIRE_MINUTES
     )
@@ -37,6 +37,7 @@ def create_access_token(user_id: int) -> str:
         "exp": expires,
         "iat": datetime.now(timezone.utc),
         "jti": str(uuid4()),
+        "auth_version": auth_version,
     }
     return jwt.encode(payload, get_secret_key(), algorithm=JWT_ALGORITHM)
 

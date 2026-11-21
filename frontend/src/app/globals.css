@@ -18,6 +18,24 @@ body {
   font-size: 14px;
 }
 
+.users-page { display: grid; gap: 24px; }
+.users-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.users-stats > div, .users-editor { background: white; border: 1px solid var(--border); border-radius: 8px; padding: 18px; }
+.users-stats strong, .users-stats span { display: block; }
+.users-stats strong { font-size: 24px; }
+.users-stats span { color: var(--muted); margin-top: 6px; }
+.users-filters, .users-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.users-filters label, .users-form label { display: grid; gap: 6px; }
+.users-filters input, .users-filters select, .users-form input, .users-form select {
+  min-width: 0; width: 100%; padding: 9px; border: 1px solid var(--border); border-radius: 6px; background: white;
+}
+.users-actions { display: flex; gap: 10px; align-items: end; }
+.users-table-wrap { overflow-x: auto; }
+.users-table { width: 100%; border-collapse: collapse; background: white; }
+.users-table th, .users-table td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.users-table button { padding: 5px 8px; }
+.auth-card form { display: grid; gap: 10px; }
+
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { opacity: .55; cursor: not-allowed; }
@@ -2106,5 +2124,176 @@ h1 { font-size: 27px; letter-spacing: -.8px; margin: 9px 0 6px; }
 
   .skills-form-full {
     grid-column: auto;
+  }
+}
+
+.esco-occupations-content {
+  width: 100%;
+}
+
+.esco-occupation-search {
+  align-items: stretch;
+}
+
+.esco-occupation-search .skills-search {
+  min-width: 0;
+  background: #fff;
+}
+
+.esco-occupation-search .button {
+  flex-shrink: 0;
+}
+
+.esco-occupation-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.esco-occupation-card {
+  width: 100%;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.esco-occupation-meta {
+  display: grid;
+  gap: 6px;
+  color: #626d80;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.esco-alternative-labels {
+  overflow-wrap: anywhere;
+}
+
+.esco-empty {
+  padding: 38px 15px;
+}
+
+.esco-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-top: 22px;
+  color: #7d879a;
+  font-size: 12px;
+}
+
+.esco-pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.esco-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.esco-occupation-detail {
+  display: grid;
+  gap: 16px;
+}
+
+.esco-back-button {
+  justify-self: start;
+  background: #fff;
+}
+
+.esco-occupation-summary .skills-panel-heading {
+  align-items: flex-start;
+}
+
+.esco-occupation-summary .skills-panel-heading h2 {
+  margin-top: 8px;
+  font-size: 23px;
+}
+
+.esco-detail-copy {
+  margin-top: 17px;
+}
+
+.esco-detail-copy h3 {
+  margin: 0 0 6px;
+  color: #424b5c;
+  font-size: 12px;
+}
+
+.esco-detail-copy p {
+  margin: 0;
+  color: #7d879a;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-line;
+}
+
+.esco-detail-identifiers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 18px;
+  padding-top: 13px;
+  border-top: 1px solid #f0f1f4;
+  color: #8791a3;
+  font-size: 11px;
+}
+
+.esco-detail-identifiers a {
+  color: #5145d8;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.esco-skill-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+
+.esco-associated-skills {
+  display: grid;
+  gap: 11px;
+  margin-top: 16px;
+}
+
+.esco-associated-skill h3 {
+  margin: 0;
+  color: #252c3b;
+  font-size: 14px;
+}
+
+.esco-associated-skill .skill-description {
+  min-height: 0;
+}
+
+.esco-skill-uri {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .esco-occupation-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .esco-occupation-grid,
+  .esco-skill-groups {
+    grid-template-columns: 1fr;
+  }
+
+  .esco-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .esco-pagination > div {
+    width: 100%;
+    justify-content: space-between;
   }
 }

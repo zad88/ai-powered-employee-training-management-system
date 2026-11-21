@@ -10,6 +10,8 @@ from backend.app.api.dependencies import (
     get_db,
 )
 from backend.app.db.employee import Employee
+from backend.app.db.company import Company
+from backend.app.services.employee_reporting import validate_reporting_manager
 from backend.app.schemas.employee import (
     EmployeeCreate,
     EmployeeUpdate,
@@ -32,6 +34,9 @@ def create_employee(
 ):
     manager_internal_id = None
     if employee_data.manager_id:
+        db.query(Company.company_id).filter(
+            Company.company_id == company_id
+        ).with_for_update().one()
         manager = db.query(Employee).filter(
             Employee.company_id == company_id,
             Employee.employee_id == employee_data.manager_id,
@@ -42,6 +47,7 @@ def create_employee(
                 status_code=422,
                 detail="Manager must be an active employee in this company.",
             )
+        validate_reporting_manager(db, company_id, manager.id, None)
         manager_internal_id = manager.id
 
     existing_employee = db.query(Employee).filter(
@@ -133,6 +139,9 @@ def update_employee(
     if "manager_id" in update_data:
         manager_id = update_data["manager_id"]
         manager = None
+        db.query(Company.company_id).filter(
+            Company.company_id == company_id
+        ).with_for_update().one()
         if manager_id:
             manager = db.query(Employee).filter(
                 Employee.company_id == company_id,
@@ -145,7 +154,9 @@ def update_employee(
                     status_code=422,
                     detail="Manager must be another active employee in this company.",
                 )
+            validate_reporting_manager(db, company_id, manager.id, employee.id)
         employee.manager_internal_id = manager.id if manager else None
+        employee.manager_id = manager.employee_id if manager else None
 
     if "email" in update_data and update_data["email"] is not None:
         existing_email = db.query(Employee).filter(

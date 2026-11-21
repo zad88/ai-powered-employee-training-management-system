@@ -4,6 +4,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -28,8 +29,14 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True
     )
+    auth_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    __table_args__ = (
+        Index("uq_users_normalized_email", func.lower(func.trim(email)), unique=True),
     )
 
 
@@ -42,6 +49,8 @@ class UserCompanyRole(Base):
             "company_id",
             name="uq_user_company_membership",
         ),
+        UniqueConstraint("user_id", name="uq_user_single_company"),
+        UniqueConstraint("employee_id", name="uq_membership_employee"),
     )
 
     membership_id: Mapped[int] = mapped_column(

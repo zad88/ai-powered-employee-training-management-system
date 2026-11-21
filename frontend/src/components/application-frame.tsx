@@ -8,7 +8,7 @@ export function ApplicationFrame({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user, loading, error } = useAuth();
 
-  if (pathname === "/login") return children;
+  if (pathname === "/login" || pathname === "/accept-invitation") return children;
   if (loading) {
     return <main className="auth-loading">Checking your session…</main>;
   }

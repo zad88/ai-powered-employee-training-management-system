@@ -34,7 +34,6 @@ type AuthContextValue = {
   error: string | null;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
-  selectCompany: (companyId: number) => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -55,30 +54,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
-  const selectCompany = useCallback((companyId: number) => {
-    const membership = user?.memberships.find(
-      (item) => item.company_id === companyId && item.is_active,
-    );
-    if (!membership) {
-      throw new Error("That company is not an active membership.");
-    }
-    setActiveMembership(membership);
-    setActiveCompanyId(membership.company_id);
-    sessionStorage.setItem("active-company-id", String(companyId));
-  }, [user]);
-
   const acceptUser = useCallback((nextUser: AuthUser) => {
-    const storedId = Number(sessionStorage.getItem("active-company-id"));
-    const selected = nextUser.memberships.find(
-      (membership) =>
-        membership.is_active && membership.company_id === storedId,
-    ) ?? nextUser.memberships.find((membership) => membership.is_active) ?? null;
+    if (nextUser.memberships.length !== 1 || !nextUser.memberships[0].is_active) {
+      throw new Error("Your account must have one active company membership.");
+    }
+    const selected = nextUser.memberships[0];
     setUser(nextUser);
     setActiveMembership(selected);
-    setActiveCompanyId(selected?.company_id ?? null);
-    if (selected) {
-      sessionStorage.setItem("active-company-id", String(selected.company_id));
-    }
+    setActiveCompanyId(selected.company_id);
     setError(null);
   }, []);
 
@@ -124,6 +107,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   useEffect(() => {
+    if (pathname === "/accept-invitation") return;
     if (!loading && pathname === "/login" && user) {
       router.replace("/");
     } else if (!loading && pathname !== "/login" && !user) {
@@ -162,7 +146,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setActiveMembership(null);
     setActiveCompanyId(null);
-    sessionStorage.removeItem("active-company-id");
     router.replace("/login");
   }, [router]);
 
@@ -173,8 +156,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     error,
     signIn,
     signOut,
-    selectCompany,
-  }), [user, activeMembership, loading, error, signIn, signOut, selectCompany]);
+  }), [user, activeMembership, loading, error, signIn, signOut]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -103,7 +103,7 @@ def get_authenticated_access_token(
         User.user_id == user_id,
         User.is_active.is_(True),
     ).first()
-    if user is None:
+    if user is None or payload.get("auth_version", 0) != user.auth_version:
         raise credentials_error
     return AuthenticatedAccessToken(
         user=user,
@@ -136,29 +136,23 @@ def get_auth_context(
             detail="Company selectors do not match.",
         )
 
-    selected_company_id = x_company_id or company_id
     query = db.query(UserCompanyRole).filter(
         UserCompanyRole.user_id == current_user.user_id,
-        UserCompanyRole.is_active.is_(True),
     )
-    if selected_company_id is not None:
-        query = query.filter(
-            UserCompanyRole.company_id == selected_company_id
-        )
-
     memberships = query.order_by(UserCompanyRole.membership_id).all()
-    if not memberships:
+    if len(memberships) != 1 or not memberships[0].is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="An active company membership is required.",
+        )
+    membership = memberships[0]
+    selected_company_id = x_company_id or company_id
+    if selected_company_id is not None and selected_company_id != membership.company_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have an active membership in this company.",
         )
-    if len(memberships) > 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Select one of your active company memberships.",
-        )
 
-    membership = memberships[0]
     normalized_role = membership.role.strip().casefold()
     if normalized_role not in ROLE_NAMES:
         raise HTTPException(

@@ -1458,3 +1458,107 @@ def test_tna_results_exclude_positions_and_employees_outside_scope(authorization
     assert {row["department"] for row in results["department_analysis"]} == {
         "Engineering"
     }
+
+
+def test_tna_matches_title_variants_without_changing_originals(authorization_env):
+    _, test_session = authorization_env
+
+    with test_session() as db:
+        employee = db.get(Employee, 12)
+        employee.job_title = "  senior   SOFTWARE\tEngineer  "
+        db.get(Employee, 13).job_title = "Architect"
+        approved = db.get(JobSkill, 1)
+        approved.job_title = "Senior Software Engineer"
+        approved.approval_status = "Approved"
+        pending = db.get(JobSkill, 2)
+        pending.job_title = " SENIOR SOFTWARE  ENGINEER "
+        assessment = db.get(SkillAssessment, 1)
+        assessment.evidence_status = "Approved"
+        db.flush()
+
+        results = analyze_company_tna(db, company_id=1, employee_ids={12, 13})
+        employees = {row["employee_id"]: row for row in results["employee_analysis"]}
+        assert employees[12]["job_title"] == "  senior   SOFTWARE\tEngineer  "
+        assert employees[12]["skills"][0]["status"] == "Skill Gap"
+        assert employees[12]["skills"][0]["gap"] == 1
+        assert employees[12]["skills"][0]["priority_score"] == 2
+        assert employees[13]["skills"] == []
+        assert len(results["position_analysis"]) == 2
+        position = next(
+            row for row in results["position_analysis"]
+            if row["approved_requirement_count"]
+        )
+        assert position["job_title"] == employee.job_title.strip()
+        assert position["employee_count"] == 1
+        assert position["pending_requirement_count"] == 1
+        assert employee.job_title == "  senior   SOFTWARE\tEngineer  "
+        assert approved.job_title == "Senior Software Engineer"
+        assert pending.job_title == " SENIOR SOFTWARE  ENGINEER "
+
+
+def test_tna_normalized_matching_remains_company_scoped(authorization_env):
+    _, test_session = authorization_env
+
+    with test_session() as db:
+        db.get(Employee, 12).job_title = "  SENIOR  engineer "
+        db.get(Employee, 21).job_title = "senior engineer"
+        local = db.get(JobSkill, 1)
+        local.job_title = "Senior Engineer"
+        local.approval_status = "Approved"
+        db.add(Skill(skill_id=2, skill_name="Foreign skill"))
+        db.add(JobSkill(
+            company_id=2, job_title="Senior Engineer", skill_id=2,
+            required_proficiency=4, importance="High", approval_status="Approved",
+        ))
+        db.flush()
+
+        local_results = analyze_company_tna(db, 1, employee_ids={12})
+        foreign_results = analyze_company_tna(db, 2, employee_ids={21})
+        assert [item["skill_id"] for item in local_results["employee_analysis"][0]["skills"]] == [1]
+        assert [item["skill_id"] for item in foreign_results["employee_analysis"][0]["skills"]] == [2]
+        assert local_results["position_analysis"][0]["approved_requirement_count"] == 1
+        assert foreign_results["position_analysis"][0]["approved_requirement_count"] == 1
+
+
+def test_tna_groups_position_variants_and_includes_unstaffed_requirements(authorization_env):
+    _, test_session = authorization_env
+
+    with test_session() as db:
+        db.get(Employee, 11).job_title = "Senior Engineer"
+        db.get(Employee, 12).job_title = " SENIOR  ENGINEER "
+        db.get(JobSkill, 1).job_title = "senior engineer"
+        db.get(JobSkill, 2).job_title = "Unstaffed Role"
+        db.flush()
+
+        results = analyze_company_tna(db, 1)
+        positions = results["position_analysis"]
+        senior = [
+            row for row in positions
+            if " ".join(row["job_title"].split()).casefold() == "senior engineer"
+        ]
+        assert len(senior) == 1
+        assert senior[0]["job_title"] in {"Senior Engineer", "SENIOR  ENGINEER"}
+        assert senior[0]["employee_count"] == 2
+        assert senior[0]["pending_requirement_count"] == 1
+        unstaffed = next(row for row in positions if row["job_title"] == "Unstaffed Role")
+        assert unstaffed["employee_count"] == 0
+        assert unstaffed["pending_requirement_count"] == 1
+
+
+@pytest.mark.parametrize("title", ["", "  \t ", None])
+def test_tna_missing_titles_do_not_match_blank_requirements(authorization_env, title):
+    _, test_session = authorization_env
+
+    with test_session() as db:
+        requirement = db.get(JobSkill, 1)
+        requirement.job_title = "   "
+        requirement.approval_status = "Approved"
+        db.flush()
+        employee = db.get(Employee, 12)
+        employee.job_title = title
+        with db.no_autoflush:
+            results = analyze_company_tna(db, 1, employee_ids={12})
+        assert results["employee_analysis"][0]["job_title"] == title
+        assert results["employee_analysis"][0]["skills"] == []
+        assert results["summary"]["confirmed_skill_gaps"] == 0
+        assert results["summary"]["assessments_needed"] == 0

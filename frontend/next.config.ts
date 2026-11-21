@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
       { source: "/api/tna", destination: `${backendUrl}/tna/` },
       { source: "/api/employees", destination: `${backendUrl}/employees/` },
       { source: "/api/skills", destination: `${backendUrl}/skills/` },
+      { source: "/api/esco-occupations", destination: `${backendUrl}/esco-occupations/` },
       { source: "/api/skill-assessments", destination: `${backendUrl}/skill-assessments/` },
       { source: "/api/job-skills", destination: `${backendUrl}/job-skills/` },
       { source: "/api/:path*", destination: `${backendUrl}/:path*` },

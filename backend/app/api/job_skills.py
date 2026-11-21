@@ -12,6 +12,7 @@ from backend.app.api.dependencies import (
 from backend.app.db.job_skill import JobSkill
 from backend.app.db.skill import Skill
 from backend.app.db.employee import Employee
+from backend.app.db.company import Company
 from backend.app.schemas.job_skill import (
     JobSkillCreate,
     JobSkillUpdate,
@@ -60,9 +61,15 @@ def create_job_skill(
             detail="Skill not found"
         )
 
+    # Serialize requirement creation with ESCO review for the same company.
+    db.query(Company.company_id).filter(
+        Company.company_id == company_id
+    ).with_for_update().one()
+
     existing_requirement = db.query(JobSkill).filter(
         JobSkill.company_id == company_id,
-        JobSkill.job_title.ilike(requirement_data.job_title),
+        func.lower(func.trim(JobSkill.job_title))
+        == requirement_data.job_title.strip().lower(),
         JobSkill.skill_id == requirement_data.skill_id
     ).first()
 

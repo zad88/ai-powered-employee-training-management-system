@@ -17,6 +17,10 @@ IMPORTANCE_WEIGHTS = {
 }
 
 
+def _normalize_job_title(title: str | None) -> str:
+    return " ".join((title or "").split()).casefold()
+
+
 def analyze_company_tna(
     db: Session,
     company_id: int,
@@ -88,7 +92,9 @@ def analyze_company_tna(
     )
 
     for requirement, skill in requirements:
-        position = requirement.job_title.strip()
+        position = _normalize_job_title(requirement.job_title)
+        if not position:
+            continue
         requirement_data = {
             "requirement_id": requirement.id,
             "skill_id": skill.skill_id,
@@ -110,18 +116,22 @@ def analyze_company_tna(
 
     # Position-level analysis includes positions with employees and
     # positions that have configured requirements but no active employees.
-    position_names = {
-        employee.job_title.strip() for employee in employees
-    }
+    position_names = {}
+    for employee in employees:
+        position = _normalize_job_title(employee.job_title)
+        position_names.setdefault(position, (employee.job_title or "").strip())
     if employee_ids is None:
-        position_names.update(position_requirements.keys())
+        for requirement, _ in requirements:
+            position = _normalize_job_title(requirement.job_title)
+            if position:
+                position_names.setdefault(position, requirement.job_title.strip())
 
     position_analysis = []
 
-    for position in sorted(position_names, key=str.lower):
+    for position in sorted(position_names, key=lambda key: position_names[key].lower()):
         position_employees = [
             employee for employee in employees
-            if employee.job_title.strip().lower() == position.lower()
+            if _normalize_job_title(employee.job_title) == position
         ]
 
         approved_items = [
@@ -140,7 +150,7 @@ def analyze_company_tna(
         ]
 
         position_analysis.append({
-            "job_title": position,
+            "job_title": position_names[position],
             "employee_count": len(position_employees),
             "approved_requirements": approved_items,
             "pending_requirements": pending_items,
@@ -169,7 +179,7 @@ def analyze_company_tna(
         department_stats[department]["employee_count"] += 1
 
         job_requirements = employee_requirements[
-            employee.job_title.strip()
+            _normalize_job_title(employee.job_title)
         ]
 
         employee_gaps = []
